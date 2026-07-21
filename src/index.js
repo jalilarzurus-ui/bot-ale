@@ -18,14 +18,16 @@ const ALE = process.env.ALE_PHONE;
 let pendingForAle = null;
 
 // ---------- Tareas programadas (hora Madrid) ----------
+// 7:00 → daily con la agenda del día (para enviar a Ale).
+// 23:00 → agenda del día siguiente, antes de dormir.
 cron.schedule('0 7 * * *', () => runBriefing('morning'), { timezone: 'Europe/Madrid' });
-cron.schedule('30 21 * * *', () => runBriefing('night'), { timezone: 'Europe/Madrid' });
+cron.schedule('0 23 * * *', () => runBriefing('night'), { timezone: 'Europe/Madrid' });
 
 async function runBriefing(kind) {
   try {
     const msg = kind === 'morning' ? await morningBriefing() : await nightBriefing();
     pendingForAle = msg;
-    const header = kind === 'morning' ? '🌅 Briefing de hoy.' : '🌙 Resumen nocturno.';
+    const header = kind === 'morning' ? '🌅 Daily de hoy (agenda).' : '🌙 Agenda de mañana.';
     await sendText(JALIL, `${header} Responde *ok* para enviárselo a Ale, o *no* para descartarlo:\n\n${msg}`);
     console.log(`[${kind}] briefing enviado a Jalil`);
   } catch (e) {
