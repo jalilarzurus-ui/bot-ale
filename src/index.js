@@ -97,8 +97,11 @@ app.post('/webhook', async (req, res) => {
           return;
         }
       }
-      // Cualquier otra cosa: respondemos a Ale y avisamos a Jalil para que la gestione.
-      await sendText(ALE, 'Puedo darte tu agenda de cualquier día 📅 — prueba *agenda hoy*, *agenda viernes* o *agenda 25/07*. Para lo demás, Jalil te ayuda enseguida.');
+      // Cualquier otra cosa: bienvenida/ayuda cálida a Ale y aviso a Jalil.
+      await sendText(
+        ALE,
+        '👋 ¡Hola Ale! Soy tu asistente de agenda. Escríbeme cuando quieras y te digo qué tienes en tu día:\n\n• *agenda hoy*\n• *agenda mañana*\n• *agenda viernes* (o cualquier día)\n• *agenda esta semana*\n• *agenda agosto* (o cualquier mes)\n\nLo que necesites saber de tu agenda, aquí estoy. Para cualquier otra cosa, Jalil está pendiente. 🙌',
+      );
       await sendText(JALIL, `💬 Ale escribió al bot: "${text}"`);
     }
   } catch (e) {
