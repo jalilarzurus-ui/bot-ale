@@ -92,10 +92,12 @@ app.post('/webhook', async (req, res) => {
         const cmd = await handleCommand(text);
         if (cmd?.reply) {
           await sendText(ALE, cmd.reply);
+          // Aviso a Jalil para que esté al tanto de lo que Ale consulta.
+          await sendText(JALIL, `📩 Ale le pidió al bot: *${text}* — se la envié directamente a él.`);
           return;
         }
       }
-      // Cualquier otra cosa: se la reenviamos a Jalil para que la gestione él.
+      // Cualquier otra cosa: respondemos a Ale y avisamos a Jalil para que la gestione.
       await sendText(ALE, 'Puedo darte tu *agenda hoy* o *agenda mañana* 📅. Para lo demás, Jalil te ayuda enseguida.');
       await sendText(JALIL, `💬 Ale escribió al bot: "${text}"`);
     }
