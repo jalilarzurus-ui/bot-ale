@@ -9,7 +9,45 @@
 // Si ANTHROPIC_API_KEY está configurada, cualquier otro texto que empiece por
 // "agrega" se interpreta con IA en lenguaje natural.
 import { createEvent, madridDateParts, CALENDARS } from './calendar.js';
-import { morningBriefing, nightBriefing } from './briefing.js';
+import { morningBriefing, nightBriefing, dayAgendaForDate } from './briefing.js';
+
+const MONTHS_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+
+// Resuelve el "cuándo" de una consulta de agenda a una fecha concreta {y, m, d}.
+// Acepta: hoy, mañana, pasado mañana, un día de la semana (jueves, viernes...),
+// "DD/MM", "DD-MM", "DD de julio". Devuelve null si no lo entiende.
+export function resolveAgendaDay(rest) {
+  let w = (rest || '').trim().toLowerCase().replace(/^(el|del|para el)\s+/, '');
+  if (!w || w === 'hoy') return madridDateParts(0);
+  if (w === 'mañana' || w === 'manana') return madridDateParts(1);
+  if (w === 'pasado' || w === 'pasado mañana' || w === 'pasado manana') return madridDateParts(2);
+
+  // Día de la semana → la próxima vez que ocurra (incluye hoy)
+  if (DAY_NAMES[w] !== undefined) {
+    const target = DAY_NAMES[w];
+    for (let off = 0; off <= 6; off++) {
+      const p = madridDateParts(off);
+      const dow = new Date(Date.UTC(p.y, p.m - 1, p.d, 12)).getUTCDay();
+      if (dow === target) return p;
+    }
+  }
+
+  // DD/MM o DD-MM (con año opcional)
+  let m = w.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
+  if (m) {
+    let y = m[3] ? +m[3] : madridDateParts(0).y;
+    if (String(y).length === 2) y += 2000;
+    return { y, m: +m[2], d: +m[1] };
+  }
+
+  // "DD de mes"
+  m = w.match(/^(\d{1,2})\s+de\s+([a-záéíóú]+)$/);
+  if (m) {
+    const mo = MONTHS_ES.indexOf(m[2]) + 1;
+    if (mo > 0) return { y: madridDateParts(0).y, m: mo, d: +m[1] };
+  }
+  return null;
+}
 
 const DAY_NAMES = { domingo: 0, lunes: 1, martes: 2, miercoles: 3, miércoles: 3, jueves: 4, viernes: 5, sabado: 6, sábado: 6 };
 
@@ -101,6 +139,17 @@ export async function handleCommand(text) {
 
   if (t === 'agenda hoy') return { reply: await morningBriefing() };
   if (t === 'agenda mañana' || t === 'agenda manana') return { reply: await nightBriefing() };
+
+  // "agenda <día>": cualquier otro día (viernes, pasado mañana, 25/07, etc.)
+  if (/^agenda\b/i.test(t)) {
+    const rest = text.trim().replace(/^agenda\s*/i, '');
+    const dp = resolveAgendaDay(rest);
+    if (dp) return { reply: await dayAgendaForDate(dp.y, dp.m, dp.d) };
+    return {
+      reply:
+        'Dime qué día 🗓️. Ejemplos: *agenda hoy*, *agenda mañana*, *agenda pasado mañana*, *agenda viernes*, *agenda 25/07*.',
+    };
+  }
 
   if (/^agrega/i.test(text)) {
     let parsed = parseSimpleAdd(text);

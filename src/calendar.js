@@ -48,10 +48,9 @@ export function madridToUtc(y, m, d, hh = 0, mm = 0) {
   return new Date(guess);
 }
 
-// Devuelve los eventos de un día (0 = hoy, 1 = mañana, hora Madrid) de TODOS los calendarios
-export async function eventsForDay(dayOffset = 0) {
+// Devuelve los eventos de una fecha concreta (año, mes, día en Madrid) de TODOS los calendarios
+export async function eventsForDateParts(y, m, d) {
   const cal = getClient();
-  const { y, m, d } = madridDateParts(dayOffset);
   const timeMin = madridToUtc(y, m, d, 0, 0).toISOString();
   const timeMax = madridToUtc(y, m, d, 23, 59).toISOString();
 
@@ -72,6 +71,12 @@ export async function eventsForDay(dayOffset = 0) {
   }
   all.sort((a, b) => startMs(a.ev) - startMs(b.ev));
   return { dateParts: { y, m, d }, events: all };
+}
+
+// Devuelve los eventos de un día relativo (0 = hoy, 1 = mañana, hora Madrid)
+export async function eventsForDay(dayOffset = 0) {
+  const { y, m, d } = madridDateParts(dayOffset);
+  return eventsForDateParts(y, m, d);
 }
 
 export async function createEvent({ calKey, summary, y, m, d, hh, mm, durMin = 60, allDay = false }) {

@@ -1,5 +1,5 @@
 // Redacción de los mensajes de briefing (formato WhatsApp)
-import { eventsForDay, TZ } from './calendar.js';
+import { eventsForDay, eventsForDateParts, TZ } from './calendar.js';
 
 const DAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
@@ -48,5 +48,17 @@ export async function nightBriefing() {
     for (const item of tomorrow.events) lines.push(eventLine(item));
   }
   lines.push('Descansa 💪');
+  return lines.join('\n');
+}
+
+// Agenda de una fecha concreta (para consultas "agenda viernes", "agenda 25/07", etc.)
+export async function dayAgendaForDate(y, m, d) {
+  const { dateParts, events } = await eventsForDateParts(y, m, d);
+  const lines = [`*Agenda — ${fmtDate(dateParts)}*`];
+  if (events.length === 0) {
+    lines.push('Sin agenda ese día 👌');
+  } else {
+    for (const item of events) lines.push(eventLine(item));
+  }
   return lines.join('\n');
 }

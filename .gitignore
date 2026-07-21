@@ -3,3 +3,5 @@ node_modules/
 .DS_Store
 _test-local.mjs
 .claude/
+.render-deploy-hook
+_test-agenda.mjs

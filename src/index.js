@@ -87,8 +87,8 @@ app.post('/webhook', async (req, res) => {
       );
     } else if (from === ALE) {
       // Ale puede consultar su agenda directamente (solo lectura).
-      const t = text.trim().toLowerCase();
-      if (t === 'agenda hoy' || t === 'agenda mañana' || t === 'agenda manana') {
+      // Ale puede consultar la agenda de cualquier día (solo lectura): "agenda viernes", etc.
+      if (/^agenda\b/i.test(text.trim())) {
         const cmd = await handleCommand(text);
         if (cmd?.reply) {
           await sendText(ALE, cmd.reply);
@@ -98,7 +98,7 @@ app.post('/webhook', async (req, res) => {
         }
       }
       // Cualquier otra cosa: respondemos a Ale y avisamos a Jalil para que la gestione.
-      await sendText(ALE, 'Puedo darte tu *agenda hoy* o *agenda mañana* 📅. Para lo demás, Jalil te ayuda enseguida.');
+      await sendText(ALE, 'Puedo darte tu agenda de cualquier día 📅 — prueba *agenda hoy*, *agenda viernes* o *agenda 25/07*. Para lo demás, Jalil te ayuda enseguida.');
       await sendText(JALIL, `💬 Ale escribió al bot: "${text}"`);
     }
   } catch (e) {
