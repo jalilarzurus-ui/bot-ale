@@ -1,5 +1,5 @@
 // Redacción de los mensajes de briefing (formato WhatsApp)
-import { eventsForDay, eventsForDateParts, TZ } from './calendar.js';
+import { eventsForDay, eventsForDateParts, eventsForRange, TZ } from './calendar.js';
 
 const DAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
@@ -59,6 +59,37 @@ export async function dayAgendaForDate(y, m, d) {
     lines.push('Sin agenda ese día 👌');
   } else {
     for (const item of events) lines.push(eventLine(item));
+  }
+  return lines.join('\n');
+}
+
+// Fecha (año, mes, día en Madrid) de un evento, para agrupar por día
+function eventDateParts(ev) {
+  const iso = ev.start?.dateTime || `${ev.start?.date}T12:00:00`;
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+  });
+  const [y, m, d] = fmt.format(new Date(iso)).split('-').map(Number);
+  return { y, m, d };
+}
+
+// Agenda de un periodo (semana, mes, un mes concreto...), agrupada por día
+export async function rangeAgenda(from, to, label) {
+  const events = await eventsForRange(from, to);
+  const lines = [`*Agenda — ${label}*`];
+  if (events.length === 0) {
+    lines.push('Nada programado en ese periodo 👌');
+    return lines.join('\n');
+  }
+  let curKey = '';
+  for (const item of events) {
+    const dp = eventDateParts(item.ev);
+    const key = `${dp.y}-${dp.m}-${dp.d}`;
+    if (key !== curKey) {
+      curKey = key;
+      lines.push(`\n*${fmtDate(dp)}*`);
+    }
+    lines.push(eventLine(item));
   }
   return lines.join('\n');
 }

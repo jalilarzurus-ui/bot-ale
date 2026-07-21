@@ -79,6 +79,31 @@ export async function eventsForDay(dayOffset = 0) {
   return eventsForDateParts(y, m, d);
 }
 
+// Devuelve todos los eventos entre dos fechas (inclusive), de TODOS los calendarios, ordenados
+export async function eventsForRange(from, to) {
+  const cal = getClient();
+  const timeMin = madridToUtc(from.y, from.m, from.d, 0, 0).toISOString();
+  const timeMax = madridToUtc(to.y, to.m, to.d, 23, 59).toISOString();
+
+  const all = [];
+  for (const [key, c] of Object.entries(CALENDARS)) {
+    if (!c.id) continue;
+    const res = await cal.events.list({
+      calendarId: c.id,
+      timeMin,
+      timeMax,
+      singleEvents: true,
+      orderBy: 'startTime',
+      timeZone: TZ,
+    });
+    for (const ev of res.data.items || []) {
+      all.push({ calKey: key, emoji: c.emoji, ev });
+    }
+  }
+  all.sort((a, b) => startMs(a.ev) - startMs(b.ev));
+  return all;
+}
+
 export async function createEvent({ calKey, summary, y, m, d, hh, mm, durMin = 60, allDay = false }) {
   const cal = getClient();
   const c = CALENDARS[calKey] || CALENDARS.actividades;

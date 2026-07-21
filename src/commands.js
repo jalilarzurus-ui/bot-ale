@@ -9,7 +9,7 @@
 // Si ANTHROPIC_API_KEY está configurada, cualquier otro texto que empiece por
 // "agrega" se interpreta con IA en lenguaje natural.
 import { createEvent, madridDateParts, CALENDARS } from './calendar.js';
-import { morningBriefing, nightBriefing, dayAgendaForDate } from './briefing.js';
+import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda } from './briefing.js';
 
 const MONTHS_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 
@@ -46,6 +46,54 @@ export function resolveAgendaDay(rest) {
     const mo = MONTHS_ES.indexOf(m[2]) + 1;
     if (mo > 0) return { y: madridDateParts(0).y, m: mo, d: +m[1] };
   }
+  return null;
+}
+
+const lastDayOfMonth = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
+
+// Resuelve una consulta de PERIODO (semana, mes, un mes concreto) a un rango de fechas.
+// Devuelve { from:{y,m,d}, to:{y,m,d}, label } o null.
+export function resolveAgendaRange(rest) {
+  let w = (rest || '').trim().toLowerCase().replace(/^(de|del|la|el|para|para el)\s+/, '').trim();
+  const today = madridDateParts(0);
+  const isNext = /(que viene|pr[oó]xim|siguiente)/.test(w);
+
+  // Semana (lunes a domingo)
+  if (/semana/.test(w)) {
+    const dow = new Date(Date.UTC(today.y, today.m - 1, today.d, 12)).getUTCDay(); // 0=domingo
+    const isoDow = dow === 0 ? 7 : dow; // 1=lunes..7=domingo
+    const toMonday = -(isoDow - 1);
+    const base = isNext ? toMonday + 7 : toMonday;
+    return {
+      from: madridDateParts(base),
+      to: madridDateParts(base + 6),
+      label: isNext ? 'la próxima semana' : 'esta semana',
+    };
+  }
+
+  // Mes (este mes / mes que viene)
+  if (/\bmes\b/.test(w)) {
+    let mo = today.m, yr = today.y;
+    if (isNext) { mo += 1; if (mo > 12) { mo = 1; yr += 1; } }
+    return {
+      from: { y: yr, m: mo, d: 1 },
+      to: { y: yr, m: mo, d: lastDayOfMonth(yr, mo) },
+      label: `${isNext ? 'el mes que viene' : 'este mes'} (${MONTHS_ES[mo - 1]})`,
+    };
+  }
+
+  // Nombre de mes: "agosto", "septiembre"...
+  const moIdx = MONTHS_ES.indexOf(w);
+  if (moIdx >= 0) {
+    const mo = moIdx + 1;
+    const yr = mo < today.m ? today.y + 1 : today.y; // si ya pasó este año, el que viene
+    return {
+      from: { y: yr, m: mo, d: 1 },
+      to: { y: yr, m: mo, d: lastDayOfMonth(yr, mo) },
+      label: `${MONTHS_ES[mo - 1]} ${yr}`,
+    };
+  }
+
   return null;
 }
 
@@ -140,14 +188,16 @@ export async function handleCommand(text) {
   if (t === 'agenda hoy') return { reply: await morningBriefing() };
   if (t === 'agenda mañana' || t === 'agenda manana') return { reply: await nightBriefing() };
 
-  // "agenda <día>": cualquier otro día (viernes, pasado mañana, 25/07, etc.)
+  // "agenda <cuándo>": día suelto o periodo (semana, mes, un mes concreto...)
   if (/^agenda\b/i.test(t)) {
     const rest = text.trim().replace(/^agenda\s*/i, '');
+    const range = resolveAgendaRange(rest);
+    if (range) return { reply: await rangeAgenda(range.from, range.to, range.label) };
     const dp = resolveAgendaDay(rest);
     if (dp) return { reply: await dayAgendaForDate(dp.y, dp.m, dp.d) };
     return {
       reply:
-        'Dime qué día 🗓️. Ejemplos: *agenda hoy*, *agenda mañana*, *agenda pasado mañana*, *agenda viernes*, *agenda 25/07*.',
+        'Dime cuándo 🗓️. Ejemplos: *agenda hoy*, *agenda viernes*, *agenda pasado mañana*, *agenda 25/07*, *agenda esta semana*, *agenda próxima semana*, *agenda agosto*.',
     };
   }
 
