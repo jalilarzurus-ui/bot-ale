@@ -94,8 +94,9 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Disparos manuales para probar sin esperar al cron (protegidos con el mismo token)
-app.post('/run/:kind', async (req, res) => {
+// Disparos manuales / desde el cron externo (protegidos con el mismo token).
+// Acepta GET y POST para que servicios como cron-job.org funcionen con su método por defecto (GET).
+app.all('/run/:kind', async (req, res) => {
   if (req.query.token !== process.env.WEBHOOK_VERIFY_TOKEN) return res.sendStatus(403);
   await runBriefing(req.params.kind === 'night' ? 'night' : 'morning');
   res.json({ ok: true });
