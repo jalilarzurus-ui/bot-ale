@@ -86,7 +86,17 @@ app.post('/webhook', async (req, res) => {
         'Comandos: *ok* (aprobar y enviar a Ale) · *no* (descartar) · *agenda hoy* · *agenda mañana* · *agrega: Título | martes 21:00 | personal*',
       );
     } else if (from === ALE) {
-      // v1: Ale solo recibe. Sus respuestas se reenvían a Jalil para que las gestione.
+      // Ale puede consultar su agenda directamente (solo lectura).
+      const t = text.trim().toLowerCase();
+      if (t === 'agenda hoy' || t === 'agenda mañana' || t === 'agenda manana') {
+        const cmd = await handleCommand(text);
+        if (cmd?.reply) {
+          await sendText(ALE, cmd.reply);
+          return;
+        }
+      }
+      // Cualquier otra cosa: se la reenviamos a Jalil para que la gestione él.
+      await sendText(ALE, 'Puedo darte tu *agenda hoy* o *agenda mañana* 📅. Para lo demás, Jalil te ayuda enseguida.');
       await sendText(JALIL, `💬 Ale escribió al bot: "${text}"`);
     }
   } catch (e) {
