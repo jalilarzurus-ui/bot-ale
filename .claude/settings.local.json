@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -lt \"$HOME/Downloads\"/*.json 2>/dev/null | head -10 || echo \"No encontré archivos .json en Descargas\")",
+      "mcp__claude-in-chrome__list_connected_browsers"
+    ]
+  }
+}
