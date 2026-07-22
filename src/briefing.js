@@ -4,6 +4,15 @@ import { eventsForDay, eventsForDateParts, eventsForRange, TZ } from './calendar
 const DAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 
+// Recordatorios fijos que van en el DAILY de la mañana (junto a la agenda).
+// Para cambiarlos, edita esta lista (Jalil solo tiene que pedírmelo).
+const DAILY_REMINDERS = [
+  'Repartir bonos',
+  'Llamadas producto y contenido',
+  'Chequear análisis competencia producto',
+  'Escuchar audio actualización de Juanber y audio actualización de Alfo',
+];
+
 function fmtDate({ y, m, d }) {
   const dow = new Date(Date.UTC(y, m - 1, d, 12)).getUTCDay();
   return `${DAYS[dow]}, ${d} de ${MONTHS[m - 1]}`;
@@ -37,6 +46,13 @@ export async function morningBriefing() {
   const t = tomorrow.events[0];
   lines.push(`*Mañana:* ${t ? `${t.ev.summary}${fmtHour(t.ev) ? `, ${fmtHour(t.ev)}` : ''}` : 'sin agenda'}`);
   return lines.join('\n');
+}
+
+// DAILY de la mañana = recordatorios fijos + agenda del día (lo que se envía a Ale a las 7:00)
+export async function morningDaily() {
+  const agenda = await morningBriefing();
+  const recordatorios = ['📋 *Recordatorios del día:*', ...DAILY_REMINDERS.map((r) => `• ${r}`)].join('\n');
+  return `${agenda}\n\n${recordatorios}`;
 }
 
 export async function nightBriefing() {

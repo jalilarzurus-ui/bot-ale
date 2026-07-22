@@ -4,7 +4,7 @@
 //        Jalil también puede escribir "agrega: ..." para crear eventos.
 import express from 'express';
 import cron from 'node-cron';
-import { morningBriefing, nightBriefing } from './briefing.js';
+import { morningDaily, nightBriefing } from './briefing.js';
 import { sendText, flushQueue } from './whatsapp.js';
 import { handleCommand } from './commands.js';
 
@@ -25,7 +25,7 @@ cron.schedule('0 23 * * *', () => runBriefing('night'), { timezone: 'Europe/Madr
 
 async function runBriefing(kind) {
   try {
-    const msg = kind === 'morning' ? await morningBriefing() : await nightBriefing();
+    const msg = kind === 'morning' ? await morningDaily() : await nightBriefing();
     pendingForAle = msg;
     const header = kind === 'morning' ? '🌅 Daily de hoy (agenda).' : '🌙 Agenda de mañana.';
     await sendText(JALIL, `${header} Responde *ok* para enviárselo a Ale, o *no* para descartarlo:\n\n${msg}`);
