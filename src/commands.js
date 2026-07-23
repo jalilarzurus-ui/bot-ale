@@ -240,7 +240,13 @@ export async function handleCommand(text) {
           'No entendí el evento 🤔. Prueba en natural ("anota comida con el inversor el jueves 9pm personal") o con formato ("agrega: Cena | jueves 21:00 | personal").',
       };
     }
-    const ev = await createEvent(parsed);
+    try {
+      await createEvent(parsed);
+    } catch (e) {
+      return {
+        reply: `⚠️ Entendí *${parsed.summary}* pero no pude crearlo: ${e?.errors?.[0]?.message || e.message}`,
+      };
+    }
     const cal = CALENDARS[parsed.calKey || 'actividades'];
     return {
       reply: `✅ Agregado a ${cal.label}: *${parsed.summary}* — ${parsed.allDay ? 'todo el día' : `${parsed.d}/${parsed.m} ${String(parsed.hh).padStart(2, '0')}:${String(parsed.mm).padStart(2, '0')}`}`,
