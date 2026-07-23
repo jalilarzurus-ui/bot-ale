@@ -5,7 +5,8 @@
 import express from 'express';
 import cron from 'node-cron';
 import { morningDaily, nightBriefing } from './briefing.js';
-import { sendText, flushQueue } from './whatsapp.js';
+import { sendText, flushQueue, getMedia } from './whatsapp.js';
+import { transcribe } from './transcribe.js';
 import { handleCommand } from './commands.js';
 import { conversationalReply } from './assistant.js';
 import { dueReminders, removeReminders } from './reminders.js';
@@ -76,9 +77,28 @@ app.post('/webhook', async (req, res) => {
   try {
     const value = req.body?.entry?.[0]?.changes?.[0]?.value;
     const msg = value?.messages?.[0];
-    if (!msg || msg.type !== 'text') return;
+    if (!msg) return;
     const from = msg.from;
-    const text = msg.text.body.trim();
+
+    // El mensaje puede ser texto o una NOTA DE VOZ (audio): la transcribimos.
+    let text;
+    if (msg.type === 'text') {
+      text = msg.text.body.trim();
+    } else if (msg.type === 'audio') {
+      try {
+        const { buffer, mimeType } = await getMedia(msg.audio.id);
+        text = await transcribe(buffer, mimeType);
+      } catch (e) {
+        console.error('audio error:', e.message);
+      }
+      if (!text) {
+        await flushQueue(from);
+        await sendText(from, '🎤 No pude entender el audio. ¿Me lo repites o lo escribes?');
+        return;
+      }
+    } else {
+      return; // otros tipos (imágenes, etc.) se ignoran por ahora
+    }
 
     // abrir ventana de 24h: entregar mensajes retenidos
     await flushQueue(from);

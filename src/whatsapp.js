@@ -3,6 +3,20 @@ const API = 'https://graph.facebook.com/v20.0';
 
 const pendingByPhone = new Map(); // cola de mensajes retenidos por ventana de 24h cerrada
 
+// Descarga un archivo multimedia (p.ej. una nota de voz) por su media_id
+export async function getMedia(mediaId) {
+  const meta = await fetch(`${API}/${mediaId}`, {
+    headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` },
+  });
+  const md = await meta.json();
+  if (!md.url) throw new Error('media sin URL: ' + JSON.stringify(md));
+  const bin = await fetch(md.url, {
+    headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` },
+  });
+  const buffer = Buffer.from(await bin.arrayBuffer());
+  return { buffer, mimeType: md.mime_type || 'audio/ogg' };
+}
+
 export async function sendText(to, body) {
   const res = await fetch(`${API}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
     method: 'POST',
