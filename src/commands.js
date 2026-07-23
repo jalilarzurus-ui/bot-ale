@@ -9,7 +9,7 @@
 // Si ANTHROPIC_API_KEY está configurada, cualquier otro texto que empiece por
 // "agrega" se interpreta con IA en lenguaje natural.
 import { createEvent, deleteEvent, moveEvent, eventsForDateParts, eventsForRange, overlappingEvents, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
-import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda, weeklyBriefing } from './briefing.js';
+import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda, weeklyBriefing, nextUp } from './briefing.js';
 import { addReminder, nextOccurrence, describeRepeat, listReminders, removeReminder, getLastFired } from './reminders.js';
 import { getWeather } from './weather.js';
 import { getCity, setCity, getAlertsOn, setAlertsOn, getAlertLead, setAlertLead } from './settings.js';
@@ -272,6 +272,34 @@ function fmtEventFull(it) {
   return `${cal?.emoji ? cal.emoji + ' ' : ''}*${it.ev.summary}* — ${cuando}${cal ? ` (${cal.label})` : ''}`;
 }
 
+// Menú de ayuda: qué sabe hacer el bot (lenguaje natural, no hace falta memorizar)
+function helpMenu() {
+  return [
+    '🤖 *Esto es lo que puedo hacer* (háblame natural, no hace falta memorizar):',
+    '',
+    '🗓️ *Agenda*',
+    '• "agenda hoy" · "agenda mañana" · "agenda viernes" · "agenda esta semana"',
+    '• "resumen semana" — la semana que viene de un vistazo',
+    '• "qué sigue" — lo próximo en tu agenda',
+    '• "¿cuándo es el vuelo?" — busco un evento aunque no sepas el día',
+    '',
+    '➕ *Crear y cambiar eventos*',
+    '• "agenda comida con el inversor el jueves a las 2"',
+    '• "mueve la reunión del viernes a las 5" · "cancela la comida del jueves"',
+    '  (antes de borrar o mover te pido confirmación; y aviso si hay choque de horario)',
+    '',
+    '⏰ *Recordatorios*',
+    '• "recuérdame llamar al proveedor mañana a las 10" · "...en 30 min"',
+    '• "recuérdame cada lunes a las 9 repartir bonos" (recurrentes 🔁)',
+    '• "mis recordatorios" · "cancela recordatorio 2" · "pospón 1 hora"',
+    '• Te aviso solo ~30 min antes de cada evento ("avisos 15", "avisos off")',
+    '',
+    '🌦️ *Extras*',
+    '• "clima" · "ciudad Dubái" · "ia redáctame un correo..." (redactar/traducir/resumir)',
+    '• Puedes mandarme *notas de voz* y te confirmo qué entendí 🎤',
+  ].join('\n');
+}
+
 // Interpreta un retraso en minutos de frases como "1 hora", "30 min", "media hora",
 // "un cuarto de hora", "2h", o un número suelto (= minutos). Devuelve null si no hay nada.
 function parseDelayMin(s) {
@@ -320,6 +348,8 @@ export async function parseManageAI(text) {
 
 export async function handleCommand(text, from) {
   const t = text.trim().toLowerCase();
+  // Versión sin acentos: evita el fallo de \b tras vocal acentuada al final ("menú", "qué").
+  const tn = t.normalize('NFD').replace(/[̀-ͯ]/g, '');
 
   // Gestión de recordatorios: LISTAR ("mis recordatorios") y CANCELAR ("cancela recordatorio 2").
   // Va antes que la gestión de eventos para que "cancela recordatorio ..." no se tome por un evento.
@@ -579,6 +609,16 @@ export async function handleCommand(text, from) {
 
   if (t === 'agenda hoy') return { reply: await morningBriefing() };
   if (t === 'agenda mañana' || t === 'agenda manana') return { reply: await nightBriefing() };
+
+  // "qué sigue" / "lo siguiente" / "ahora" → el próximo evento desde ahora
+  if (/^(que sigue|lo que sigue|lo siguiente|que viene|siguiente evento|proximo evento|que tengo ahora|que hay ahora)\b/.test(tn) || tn === 'siguiente' || tn === 'ahora') {
+    return { reply: await nextUp() };
+  }
+
+  // "ayuda" / "menú" → qué sabe hacer el bot (útil ahora que Ale también lo usa)
+  if (/^(ayuda|menu|comandos|help|que (puedes|sabes) hacer)\b/.test(tn) || tn === '?') {
+    return { reply: helpMenu() };
+  }
 
   // "resumen semana" / "resumen" / "semana que viene" → semana entera de un vistazo
   if (/^(resumen|semana que viene)\b/i.test(t) || t === 'semana') {

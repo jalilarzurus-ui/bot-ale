@@ -103,6 +103,33 @@ export async function weeklyBriefing() {
   return lines.join('\n');
 }
 
+// "¿Qué sigue?" — el próximo evento desde ahora (hoy; si ya no queda, el primero de mañana).
+export async function nextUp() {
+  const now = Date.now();
+  const today = await eventsForDay(0);
+  const upcoming = today.events.filter((it) => {
+    const dt = it.ev.start?.dateTime;
+    return dt && new Date(dt).getTime() > now;
+  });
+  if (upcoming.length) {
+    const it = upcoming[0];
+    const dt = new Date(it.ev.start.dateTime);
+    const hora = dt.toLocaleTimeString('es-ES', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+    const mins = Math.round((dt.getTime() - now) / 60000);
+    const enTxt = mins < 60 ? `en ${mins} min` : `en ${Math.floor(mins / 60)}h${mins % 60 ? ` ${mins % 60}min` : ''}`;
+    const tag = it.emoji ? ` ${it.emoji}` : '';
+    return `⏭️ *Lo siguiente:* ${it.ev.summary}${tag} — hoy a las ${hora} (${enTxt}).`;
+  }
+  const tm = await eventsForDay(1);
+  const t = tm.events.find((it) => it.ev.start?.dateTime) || tm.events[0];
+  if (t) {
+    const dt = t.ev.start?.dateTime;
+    const hora = dt ? new Date(dt).toLocaleTimeString('es-ES', { timeZone: TZ, hour: '2-digit', minute: '2-digit' }) : null;
+    return `Hoy ya no queda nada 👌. Lo siguiente es *mañana*: ${t.ev.summary}${hora ? ` a las ${hora}` : ' (todo el día)'}.`;
+  }
+  return 'No tienes nada próximo en la agenda 👌.';
+}
+
 // Agenda de una fecha concreta (para consultas "agenda viernes", "agenda 25/07", etc.)
 export async function dayAgendaForDate(y, m, d) {
   const { dateParts, events } = await eventsForDateParts(y, m, d);
