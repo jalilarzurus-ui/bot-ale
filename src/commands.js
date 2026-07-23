@@ -10,7 +10,7 @@
 // "agrega" se interpreta con IA en lenguaje natural.
 import { createEvent, deleteEvent, moveEvent, eventsForDateParts, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
 import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda } from './briefing.js';
-import { addReminder, nextOccurrence, describeRepeat } from './reminders.js';
+import { addReminder, nextOccurrence, describeRepeat, listReminders, removeReminder } from './reminders.js';
 import { getWeather } from './weather.js';
 import { getCity, setCity } from './settings.js';
 import { setPending } from './confirm.js';
@@ -306,6 +306,58 @@ export async function parseManageAI(text) {
 
 export async function handleCommand(text, from) {
   const t = text.trim().toLowerCase();
+
+  // Gestión de recordatorios: LISTAR ("mis recordatorios") y CANCELAR ("cancela recordatorio 2").
+  // Va antes que la gestión de eventos para que "cancela recordatorio ..." no se tome por un evento.
+  {
+    const mencionaRec = /recordatorios?\b/i.test(t);
+    const esCancelRec = /^(cancela|borra|elimina|quita|anula|olvida)\b/i.test(t) && mencionaRec;
+    const esListarRec = /^(mis|ver|lista|listar|cu[aá]les|qu[eé])\b.*recordatorios?\b/i.test(t) || /^recordatorios\b/i.test(t);
+
+    if (esCancelRec) {
+      const rs = listReminders(from);
+      if (!rs.length) return { reply: '📭 No tienes recordatorios pendientes.' };
+      // Por número: "cancela recordatorio 2"
+      const numMatch = t.match(/\b(\d{1,2})\b/);
+      let target = null;
+      if (numMatch) {
+        const idx = Number(numMatch[1]) - 1;
+        if (idx < 0 || idx >= rs.length) {
+          return { reply: `Solo tienes ${rs.length} recordatorio(s). Escribe "mis recordatorios" para ver la lista con sus números.` };
+        }
+        target = rs[idx];
+      } else {
+        // Por palabra clave: quitar mando y palabras vacías, buscar en el texto
+        const kw = norm(text)
+          .replace(/^(cancela|borra|elimina|quita|anula|olvida)\s+/, '')
+          .replace(/\b(el|la|los|las|mi|mis|de|del|un|una|numero|num|no|n|recordatorio|recordatorios)\b/g, ' ')
+          .replace(/\s+/g, ' ').trim();
+        if (!kw) {
+          return { reply: '¿Cuál recordatorio borro? Dime el número (ej: "cancela recordatorio 2") o una palabra de su texto. Escribe "mis recordatorios" para verlos.' };
+        }
+        const hits = rs.filter((r) => norm(r.text).includes(kw));
+        if (!hits.length) return { reply: `No encontré ningún recordatorio con "${kw}". Escribe "mis recordatorios" para ver la lista.` };
+        if (hits.length > 1) {
+          return { reply: `Hay varios con "${kw}":\n${hits.map((r) => '• ' + r.text).join('\n')}\nDime el número (mira "mis recordatorios").` };
+        }
+        target = hits[0];
+      }
+      removeReminder(target.id);
+      return { reply: `🗑️ Recordatorio borrado: *${target.text}*${target.repeat ? ' 🔁' : ''}` };
+    }
+
+    if (esListarRec) {
+      const rs = listReminders(from);
+      if (!rs.length) return { reply: '📭 No tienes recordatorios pendientes.\nCrea uno con "recuérdame llamar al proveedor mañana a las 10".' };
+      const lines = rs.map((r, i) => {
+        const cuando = new Date(r.dueTs).toLocaleString('es-ES', {
+          timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+        });
+        return `${i + 1}. *${r.text}* → ${cuando}${r.repeat ? ' 🔁 (' + describeRepeat(r.repeat) + ')' : ''}`;
+      });
+      return { reply: `📋 Tus recordatorios (${rs.length}):\n${lines.join('\n')}\n\nPara borrar uno: "cancela recordatorio 2".` };
+    }
+  }
 
   // "cancela/mueve ..." : gestionar un evento existente (cancelar o mover)
   if (/^(cancela|borra|elimina|quita|anula|mueve|reprograma|cambia)\b/i.test(t)) {
