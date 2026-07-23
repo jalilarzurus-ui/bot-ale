@@ -7,6 +7,7 @@ import cron from 'node-cron';
 import { morningDaily, nightBriefing } from './briefing.js';
 import { sendText, flushQueue } from './whatsapp.js';
 import { handleCommand } from './commands.js';
+import { dueReminders, removeReminders } from './reminders.js';
 
 const app = express();
 app.use(express.json());
@@ -22,6 +23,26 @@ let pendingForAle = null;
 // 23:00 → agenda del día siguiente, antes de dormir.
 cron.schedule('0 7 * * *', () => runBriefing('morning'), { timezone: 'Europe/Madrid' });
 cron.schedule('0 23 * * *', () => runBriefing('night'), { timezone: 'Europe/Madrid' });
+
+// Recordatorios: cada minuto, avisa de los que ya toca.
+cron.schedule('* * * * *', async () => {
+  try {
+    const due = dueReminders(Date.now());
+    if (!due.length) return;
+    const done = [];
+    for (const r of due) {
+      try {
+        await sendText(r.chatId, `⏰ *Recordatorio:* ${r.text}`);
+      } catch (e) {
+        console.error('reminder send error:', e.message);
+      }
+      done.push(r.id); // se quita aunque falle el envío, para no repetir
+    }
+    removeReminders(done);
+  } catch (e) {
+    console.error('reminder cron error:', e.message);
+  }
+});
 
 async function runBriefing(kind) {
   try {
@@ -78,7 +99,7 @@ app.post('/webhook', async (req, res) => {
         await sendText(JALIL, '🗑️ Descartado. No se envió nada a Ale.');
         return;
       }
-      const cmd = await handleCommand(text);
+      const cmd = await handleCommand(text, from);
       if (cmd?.reply) {
         await sendText(JALIL, cmd.reply);
         return;
@@ -90,7 +111,7 @@ app.post('/webhook', async (req, res) => {
     } else if (from === ALE) {
       // Ale tiene acceso completo (agenda, crear eventos, asistente IA). Jalil se entera de todo.
       // (No puede aprobar briefings: 'ok'/'no' solo se manejan en la rama de Jalil.)
-      const cmd = await handleCommand(text);
+      const cmd = await handleCommand(text, from);
       if (cmd?.reply) {
         await sendText(ALE, cmd.reply);
         await sendText(JALIL, `📩 Ale usó el bot: "${text}"`);

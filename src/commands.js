@@ -8,8 +8,9 @@
 //
 // Si ANTHROPIC_API_KEY está configurada, cualquier otro texto que empiece por
 // "agrega" se interpreta con IA en lenguaje natural.
-import { createEvent, madridDateParts, CALENDARS } from './calendar.js';
+import { createEvent, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
 import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda } from './briefing.js';
+import { addReminder } from './reminders.js';
 
 const MONTHS_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 
@@ -220,8 +221,71 @@ export async function askAI(prompt) {
   return data.content?.[0]?.text?.trim() || null;
 }
 
-export async function handleCommand(text) {
+// La IA extrae el recordatorio (qué + cuándo). El código calcula la hora exacta.
+export async function parseReminderAI(text) {
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5',
+      max_tokens: 200,
+      system:
+        'Extrae un recordatorio del mensaje (en español). Responde SOLO con JSON, sin texto extra:\n' +
+        '{"what":"...","dayText":"...","hh":10,"mm":0,"inMinutes":null}\n' +
+        '- what: qué hay que recordar, corto y claro.\n' +
+        '- Si dice "en X minutos/horas" (ej: "en 30 minutos", "en 2 horas"), pon inMinutes con el total de minutos (2 horas = 120) y deja dayText, hh y mm en null.\n' +
+        '- Si dice un día u hora, pon inMinutes en null, y rellena dayText SOLO con la palabra del día ("hoy","mañana","pasado mañana","lunes"..."domingo","25/07","4 de agosto") — NO calcules la fecha — y hh, mm en formato 24h. Si no se dice hora, usa hh:9, mm:0.',
+      messages: [{ role: 'user', content: text }],
+    }),
+  });
+  const data = await res.json();
+  try {
+    const txt = data.content?.[0]?.text || '';
+    return JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1));
+  } catch {
+    return null;
+  }
+}
+
+export async function handleCommand(text, from) {
   const t = text.trim().toLowerCase();
+
+  // "recuérdame ...": crear un recordatorio que avisa a la hora indicada
+  if (/^(recu[eé]rdame|recu[eé]rda|recordar|recordatorio)\b/i.test(t)) {
+    const r = await parseReminderAI(text);
+    if (!r || !r.what) {
+      return {
+        reply:
+          'No entendí el recordatorio 🤔. Ejemplos: "recuérdame llamar al proveedor mañana a las 10" o "recuérdame en 30 minutos revisar el correo".',
+      };
+    }
+    let dueTs;
+    if (r.inMinutes) {
+      dueTs = Date.now() + Number(r.inMinutes) * 60000;
+    } else {
+      const dp = resolveAgendaDay(r.dayText || 'hoy');
+      if (!dp) return { reply: 'No entendí el cuándo 🤔. Prueba "mañana a las 10" o "en 2 horas".' };
+      dueTs = madridToUtc(dp.y, dp.m, dp.d, r.hh ?? 9, r.mm ?? 0).getTime();
+    }
+    if (dueTs < Date.now() - 60000) {
+      return { reply: '⏰ Esa hora ya pasó. Dime una hora futura (ej: "mañana a las 10" o "en 2 horas").' };
+    }
+    addReminder({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      chatId: from,
+      text: r.what,
+      dueTs,
+    });
+    const cuando = new Date(dueTs).toLocaleString('es-ES', {
+      timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit',
+    });
+    return { reply: `⏰ Hecho, te lo recuerdo: *${r.what}*\n🗓️ ${cuando}` };
+  }
 
   // "ia ...": asistente de IA (redactar, resumir, traducir, preguntar)
   if (/^(ia|pregunta|claude)\b/i.test(t)) {

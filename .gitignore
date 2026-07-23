@@ -6,3 +6,4 @@ _test-local.mjs
 .render-deploy-hook
 _test-agenda.mjs
 RETOMAR.md
+reminders-local.json
