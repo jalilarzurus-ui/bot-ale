@@ -99,9 +99,12 @@ export function resolveAgendaRange(rest) {
 
 const DAY_NAMES = { domingo: 0, lunes: 1, martes: 2, miercoles: 3, miércoles: 3, jueves: 4, viernes: 5, sabado: 6, sábado: 6 };
 
+// Palabras con las que Jalil puede pedir crear un evento
+const ADD_TRIGGER = /^(agrega|anota|apunta|añade|ag[eé]ndame|agendame|crea|pon)\b/i;
+
 export function parseSimpleAdd(text) {
   // "agrega: TITULO | CUANDO | CALENDARIO(opcional)"
-  const body = text.replace(/^agrega:?\s*/i, '');
+  const body = text.replace(/^(agrega|anota|apunta|añade|ag[eé]ndame|agendame|crea|pon)\s*:?\s*/i, '');
   const parts = body.split('|').map((s) => s.trim());
   if (parts.length < 2) return null;
   const [summary, when, calRaw] = parts;
@@ -156,9 +159,11 @@ function build(y, m, d, hh, mm) {
 }
 
 // IA opcional para lenguaje natural ("agrega una cena con el equipo el jueves a las 9 de la noche en personal")
+// La IA extrae los datos del evento, pero NO calcula la fecha (los modelos rápidos
+// fallan con fechas relativas). Devuelve la PALABRA del día ("dayText") y nuestro
+// código la convierte en fecha exacta de forma determinista (resolveAgendaDay).
 export async function parseWithAI(text) {
   if (!process.env.ANTHROPIC_API_KEY) return null;
-  const today = madridDateParts(0);
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -169,7 +174,14 @@ export async function parseWithAI(text) {
     body: JSON.stringify({
       model: 'claude-haiku-4-5',
       max_tokens: 300,
-      system: `Extrae del mensaje un evento de calendario. Hoy es ${today.y}-${today.m}-${today.d} (zona Europe/Madrid). Responde SOLO JSON: {"summary":"...","y":2026,"m":7,"d":21,"hh":21,"mm":0,"allDay":false,"calKey":"actividades|mentoria|personal|viajes","durMin":60}. Si no hay hora, allDay:true y omite hh/mm.`,
+      system:
+        'Extrae un evento de calendario del mensaje (en español). Responde SOLO con JSON, sin texto extra:\n' +
+        '{"summary":"...","dayText":"...","hh":21,"mm":0,"allDay":false,"calKey":"actividades|mentoria|personal|viajes","durMin":60}\n' +
+        '- summary: título corto y claro del evento.\n' +
+        '- dayText: SOLO la parte del día, tal cual se dice, SIN calcular fechas. Ejemplos válidos: "hoy", "mañana", "pasado mañana", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo", "25/07", "4 de agosto". Si no se menciona día, usa "hoy".\n' +
+        '- hh, mm: hora en formato 24h. Si NO hay hora, pon "allDay":true y omite hh/mm.\n' +
+        '- calKey: el calendario más adecuado (mentoria = llamadas/mentorías; viajes = vuelos/viajes; personal = personal; actividades = el resto).\n' +
+        '- durMin: duración en minutos (por defecto 60).',
       messages: [{ role: 'user', content: text }],
     }),
   });
@@ -201,12 +213,31 @@ export async function handleCommand(text) {
     };
   }
 
-  if (/^agrega/i.test(text)) {
+  if (ADD_TRIGGER.test(t)) {
+    // 1) Formato estructurado con barras: "agrega: Título | jueves 21:00 | personal"
     let parsed = parseSimpleAdd(text);
-    if (!parsed) parsed = await parseWithAI(text);
+    // 2) Lenguaje natural con IA: la IA saca los datos, el código calcula la fecha.
+    if (!parsed) {
+      const ai = await parseWithAI(text);
+      if (ai && ai.summary) {
+        const dp = resolveAgendaDay(ai.dayText || 'hoy');
+        if (dp) {
+          const sinHora = ai.allDay || ai.hh === undefined || ai.hh === null;
+          parsed = {
+            summary: ai.summary,
+            calKey: normalizeCal(ai.calKey),
+            y: dp.y, m: dp.m, d: dp.d,
+            hh: ai.hh, mm: ai.mm ?? 0,
+            allDay: sinHora,
+            durMin: ai.durMin || 60,
+          };
+        }
+      }
+    }
     if (!parsed) {
       return {
-        reply: 'No entendí el evento 🤔. Formato: "agrega: Cena con socios | martes 21:00 | personal"',
+        reply:
+          'No entendí el evento 🤔. Prueba en natural ("anota comida con el inversor el jueves 9pm personal") o con formato ("agrega: Cena | jueves 21:00 | personal").',
       };
     }
     const ev = await createEvent(parsed);
