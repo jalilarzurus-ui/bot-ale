@@ -1,10 +1,17 @@
-// Capa conversacional: cuando el mensaje NO es un comando, responde la IA de forma
-// natural, con memoria reciente de la conversación y con la agenda próxima a la vista.
-import { eventsForRange, madridDateParts, TZ } from './calendar.js';
+// Asistente conversacional con "manos": un agente de IA que además de conversar
+// puede EJECUTAR acciones (crear/mover/cancelar eventos, poner recordatorios)
+// mediante herramientas. Reutiliza la lógica determinista ya existente (las fechas
+// las calcula el código, nunca la IA).
+import {
+  eventsForRange, eventsForDateParts, createEvent, deleteEvent, moveEvent,
+  madridDateParts, madridToUtc, TZ, CALENDARS,
+} from './calendar.js';
 import { getCity } from './settings.js';
+import { addReminder } from './reminders.js';
+import { resolveAgendaDay, resolveAgendaRange } from './commands.js';
 
 const histories = new Map(); // chatId -> [{ role, content }]
-const MAX_TURNS = 10; // ~5 intercambios
+const MAX_TURNS = 10;
 
 function remember(chatId, role, content) {
   const h = histories.get(chatId) || [];
@@ -13,25 +20,195 @@ function remember(chatId, role, content) {
   histories.set(chatId, h);
 }
 
-// Lista de eventos de los próximos 8 días, para que la IA pueda responder sobre la agenda.
+function norm(s) {
+  return (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+function validCal(k) {
+  return ['actividades', 'mentoria', 'personal', 'viajes'].includes(k) ? k : 'actividades';
+}
+
+function fmtEventList(events) {
+  if (!events.length) return 'Sin eventos.';
+  return events
+    .map((it) => {
+      const dt = it.ev.start?.dateTime;
+      const cuando = dt
+        ? new Date(dt).toLocaleString('es-ES', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+        : '(todo el día)';
+      return `- ${cuando}: ${it.ev.summary} [${CALENDARS[it.calKey].label}]`;
+    })
+    .join('\n');
+}
+
 async function upcomingSnapshot() {
   try {
     const events = await eventsForRange(madridDateParts(0), madridDateParts(8));
-    if (!events.length) return 'No hay eventos en los próximos 8 días.';
-    return events
-      .map((it) => {
-        const dt = it.ev.start?.dateTime;
-        const cuando = dt
-          ? new Date(dt).toLocaleString('es-ES', {
-              timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit',
-            })
-          : '(todo el día)';
-        return `- ${cuando}: ${it.ev.summary}`;
-      })
-      .join('\n');
+    return events.length ? fmtEventList(events) : 'No hay eventos en los próximos 8 días.';
   } catch {
     return '(no disponible ahora mismo)';
   }
+}
+
+// --------- Herramientas que el agente puede usar ---------
+const TOOLS = [
+  {
+    name: 'crear_evento',
+    description: 'Crea un evento nuevo en el calendario.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: 'Título del evento' },
+        dayText: { type: 'string', description: 'Día en palabras (hoy, mañana, pasado mañana, lunes..domingo, 25/07, 4 de agosto). NO calcules la fecha.' },
+        hh: { type: 'integer', description: 'Hora en 24h. Omitir si es de todo el día.' },
+        mm: { type: 'integer', description: 'Minutos (0 si no se dice).' },
+        allDay: { type: 'boolean', description: 'true si es de todo el día (sin hora).' },
+        calKey: { type: 'string', enum: ['actividades', 'mentoria', 'personal', 'viajes'], description: 'mentoria=llamadas/mentorías; viajes=vuelos/viajes; personal=personal; actividades=el resto.' },
+        durMin: { type: 'integer', description: 'Duración en minutos (por defecto 60).' },
+      },
+      required: ['summary', 'dayText'],
+    },
+  },
+  {
+    name: 'mover_evento',
+    description: 'Mueve un evento existente a otra fecha u hora.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        keyword: { type: 'string', description: 'Palabra clave para encontrar el evento (ej: "comida", "reunión con Juan").' },
+        dayText: { type: 'string', description: 'Día ACTUAL del evento, en palabras. NO calcules la fecha.' },
+        newDayText: { type: 'string', description: 'Nuevo día si cambia (en palabras). Omitir si es el mismo día.' },
+        newHh: { type: 'integer', description: 'Nueva hora en 24h.' },
+        newMm: { type: 'integer', description: 'Nuevos minutos (0 si no se dice).' },
+      },
+      required: ['keyword', 'dayText', 'newHh'],
+    },
+  },
+  {
+    name: 'cancelar_evento',
+    description: 'Cancela/borra un evento existente.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        keyword: { type: 'string', description: 'Palabra clave para encontrar el evento.' },
+        dayText: { type: 'string', description: 'Día del evento, en palabras. NO calcules la fecha.' },
+      },
+      required: ['keyword', 'dayText'],
+    },
+  },
+  {
+    name: 'poner_recordatorio',
+    description: 'Pone un recordatorio que avisará a la persona a la hora indicada.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        what: { type: 'string', description: 'Qué recordar.' },
+        dayText: { type: 'string', description: 'Día en palabras (omitir si usas inMinutes).' },
+        hh: { type: 'integer', description: 'Hora en 24h (por defecto 9 si no se dice).' },
+        mm: { type: 'integer' },
+        inMinutes: { type: 'integer', description: 'Minutos desde ahora, para "en X minutos/horas".' },
+      },
+      required: ['what'],
+    },
+  },
+  {
+    name: 'consultar_agenda',
+    description: 'Consulta los eventos de un día o periodo concreto (útil para fechas fuera de los próximos 8 días).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cuando: { type: 'string', description: 'Ej: "25/07", "4 de agosto", "agosto", "semana que viene", "lunes".' },
+      },
+      required: ['cuando'],
+    },
+  },
+];
+
+// --------- Ejecución de cada herramienta (código determinista) ---------
+async function executeTool(name, input, ctx) {
+  try {
+    if (name === 'crear_evento') {
+      const dp = resolveAgendaDay(input.dayText || 'hoy');
+      if (!dp) return 'No entendí el día. Pide una aclaración.';
+      const allDay = input.allDay || input.hh === undefined || input.hh === null;
+      await createEvent({
+        calKey: validCal(input.calKey), summary: input.summary,
+        y: dp.y, m: dp.m, d: dp.d, hh: input.hh, mm: input.mm ?? 0,
+        durMin: input.durMin || 60, allDay,
+      });
+      const cuando = allDay ? `${dp.d}/${dp.m} (todo el día)` : `${dp.d}/${dp.m} a las ${String(input.hh).padStart(2, '0')}:${String(input.mm ?? 0).padStart(2, '0')}`;
+      return `OK. Evento creado: "${input.summary}" el ${cuando} en ${CALENDARS[validCal(input.calKey)].label}.`;
+    }
+
+    if (name === 'cancelar_evento' || name === 'mover_evento') {
+      const dp = resolveAgendaDay(input.dayText || 'hoy');
+      if (!dp) return 'No entendí el día del evento. Pide una aclaración.';
+      const { events } = await eventsForDateParts(dp.y, dp.m, dp.d);
+      const matches = events.filter((it) => norm(it.ev.summary).includes(norm(input.keyword)));
+      if (!matches.length) return `No encontré ningún evento de "${input.keyword}" el ${dp.d}/${dp.m}. Pregunta al usuario para precisar.`;
+      if (matches.length > 1) return `Hay varios el ${dp.d}/${dp.m}: ${matches.map((it) => it.ev.summary).join('; ')}. Pide al usuario que precise cuál (nombre u hora).`;
+      const it = matches[0];
+      if (name === 'cancelar_evento') {
+        await deleteEvent(it.calKey, it.ev.id);
+        return `OK. Cancelado: "${it.ev.summary}" del ${dp.d}/${dp.m}.`;
+      }
+      // mover
+      const target = input.newDayText ? resolveAgendaDay(input.newDayText) : dp;
+      if (!target) return 'No entendí el nuevo día. Pide una aclaración.';
+      if (input.newHh === undefined || input.newHh === null) return 'Falta la nueva hora. Pregunta al usuario.';
+      let durMin = 60;
+      if (it.ev.start?.dateTime && it.ev.end?.dateTime) {
+        durMin = Math.max(15, Math.round((new Date(it.ev.end.dateTime) - new Date(it.ev.start.dateTime)) / 60000));
+      }
+      await moveEvent(it.calKey, it.ev.id, target.y, target.m, target.d, input.newHh, input.newMm ?? 0, durMin);
+      return `OK. Movido: "${it.ev.summary}" a ${target.d}/${target.m} ${String(input.newHh).padStart(2, '0')}:${String(input.newMm ?? 0).padStart(2, '0')}.`;
+    }
+
+    if (name === 'poner_recordatorio') {
+      let dueTs;
+      let cuandoTxt;
+      if (input.inMinutes) {
+        dueTs = Date.now() + Number(input.inMinutes) * 60000;
+      } else {
+        const dp = resolveAgendaDay(input.dayText || 'hoy');
+        if (!dp) return 'No entendí el cuándo del recordatorio. Pide una aclaración.';
+        dueTs = madridToUtc(dp.y, dp.m, dp.d, input.hh ?? 9, input.mm ?? 0).getTime();
+      }
+      if (dueTs < Date.now() - 60000) return 'Esa hora ya pasó. Pide una hora futura.';
+      addReminder({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, chatId: ctx.chatId, text: input.what, dueTs });
+      cuandoTxt = new Date(dueTs).toLocaleString('es-ES', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+      return `OK. Recordatorio puesto: "${input.what}" para ${cuandoTxt}.`;
+    }
+
+    if (name === 'consultar_agenda') {
+      const range = resolveAgendaRange(input.cuando);
+      if (range) {
+        const events = await eventsForRange(range.from, range.to);
+        return `Eventos de ${range.label}:\n${fmtEventList(events)}`;
+      }
+      const dp = resolveAgendaDay(input.cuando);
+      if (!dp) return 'No entendí la fecha.';
+      const { events } = await eventsForDateParts(dp.y, dp.m, dp.d);
+      return `Eventos del ${dp.d}/${dp.m}:\n${fmtEventList(events)}`;
+    }
+
+    return 'Herramienta desconocida.';
+  } catch (e) {
+    return `Error al ejecutar: ${e?.errors?.[0]?.message || e.message}`;
+  }
+}
+
+async function callClaude(system, messages) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ model: 'claude-haiku-4-5', max_tokens: 1024, system, tools: TOOLS, messages }),
+  });
+  return res.json();
 }
 
 export async function conversationalReply(chatId, text, who = 'Jalil') {
@@ -41,50 +218,54 @@ export async function conversationalReply(chatId, text, who = 'Jalil') {
 
   const agenda = await upcomingSnapshot();
   const ahora = new Date();
-  const hoy = ahora.toLocaleDateString('es-ES', {
-    timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
-  });
+  const hoy = ahora.toLocaleDateString('es-ES', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const horaNum = Number(ahora.toLocaleString('en-US', { timeZone: TZ, hour: '2-digit', hour12: false }));
   const franja = horaNum < 6 ? 'la madrugada' : horaNum < 13 ? 'la mañana' : horaNum < 20 ? 'la tarde' : 'la noche';
   const quien = who === 'Ale'
-    ? 'Estás hablando con Ale (el jefe). Trátale con cercanía y eficiencia, resolutivo.'
+    ? 'Estás hablando con Ale (el jefe). Trátale con cercanía y eficiencia.'
     : 'Estás hablando con Jalil, el asistente de confianza de Ale que organiza su día contigo. Habláis de tú a tú, en corto.';
 
   const system =
-    'Eres el jefe de gabinete personal por WhatsApp de un empresario (Ale). Eres su mano derecha digital.\n' +
+    'Eres el jefe de gabinete personal por WhatsApp de un empresario (Ale). Eres su mano derecha digital, y puedes ACTUAR (crear, mover y cancelar eventos, y poner recordatorios) usando tus herramientas.\n' +
     `${quien}\n` +
     `Es ${franja} de hoy, ${hoy}. La ciudad actual es ${getCity()}.\n\n` +
-    'PERSONALIDAD: cercano pero profesional, directo, resolutivo y proactivo. Hablas natural en español, con frases cortas y humanas — nunca sonando a robot ni a "IA". Algún emoji con moderación. Vas al grano con calidez.\n\n' +
-    'AGENDA de los próximos 8 días (zona Europe/Madrid):\n' +
+    'PERSONALIDAD: cercano pero profesional, directo, resolutivo y proactivo. Español natural, frases cortas y humanas, nunca sonando a robot. Algún emoji con moderación.\n\n' +
+    'AGENDA de los próximos 8 días (Europe/Madrid):\n' +
     `${agenda}\n\n` +
     'CÓMO ACTÚAS:\n' +
-    '- Preguntas sobre la agenda: mira la lista de arriba y responde con seguridad y concreto. NUNCA inventes eventos que no estén en la lista.\n' +
-    '- Sé proactivo: si detectas un choque de horarios, un hueco útil o algo relevante para su día, coméntalo en una línea.\n' +
-    '- Acciones (crear/cancelar/mover eventos, recordatorios, clima) se hacen con frases directas: "anota...", "cancela...", "mueve...", "recuérdame...", "clima". Si te piden una acción, guíales con naturalidad (ej: «dímelo así: "anota cena el sábado 21h" y lo dejo agendado»).\n' +
-    '- Responde solo a lo que te dicen, sin relleno ni repetir lo obvio.';
+    '- Cuando te pidan crear/mover/cancelar un evento o poner un recordatorio, HAZLO con la herramienta correspondiente (no te limites a decir cómo). Pasa el día en palabras (hoy, mañana, jueves, 25/07...) — el sistema calcula la fecha exacta.\n' +
+    '- Si falta un dato imprescindible (p. ej. la hora, o qué evento exacto cuando hay varios), pregunta en una línea en vez de adivinar.\n' +
+    '- Para preguntas sobre la agenda, usa la lista de arriba; para fechas lejanas usa consultar_agenda. NUNCA inventes eventos.\n' +
+    '- Sé proactivo: si ves un choque de horarios o algo relevante, coméntalo brevemente.\n' +
+    '- Tras hacer una acción, confírmalo en una frase corta y natural. Responde solo a lo que te piden, sin relleno.';
 
-  const history = histories.get(chatId) || [];
-  const messages = [...history, { role: 'user', content: text }];
+  const messages = [...(histories.get(chatId) || []), { role: 'user', content: text }];
 
-  let reply;
+  let finalText = '';
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ model: 'claude-haiku-4-5', max_tokens: 600, system, messages }),
-    });
-    const data = await res.json();
-    reply = data.content?.[0]?.text?.trim();
+    for (let i = 0; i < 5; i++) {
+      const resp = await callClaude(system, messages);
+      if (!resp || !resp.content) break;
+      messages.push({ role: 'assistant', content: resp.content });
+      const toolUses = resp.content.filter((b) => b.type === 'tool_use');
+      const textOut = resp.content.filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
+      if (resp.stop_reason !== 'tool_use' || !toolUses.length) {
+        finalText = textOut;
+        break;
+      }
+      const results = [];
+      for (const tu of toolUses) {
+        const out = await executeTool(tu.name, tu.input, { chatId });
+        results.push({ type: 'tool_result', tool_use_id: tu.id, content: out });
+      }
+      messages.push({ role: 'user', content: results });
+    }
   } catch (e) {
-    console.error('assistant error:', e.message);
+    console.error('assistant agent error:', e.message);
   }
-  if (!reply) reply = 'Perdona, no te he entendido bien 🤔. ¿Puedes decírmelo de otra forma?';
 
+  if (!finalText) finalText = 'Hecho ✅';
   remember(chatId, 'user', text);
-  remember(chatId, 'assistant', reply);
-  return reply;
+  remember(chatId, 'assistant', finalText);
+  return finalText;
 }
