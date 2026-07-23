@@ -130,42 +130,55 @@ app.post('/webhook', async (req, res) => {
       clearPending(from);
     }
 
-    if (from === JALIL) {
-      const t = text.toLowerCase();
-      if (t === 'ok' || t === 'ok!' || t === '👍') {
-        if (pendingForAle) {
-          await sendText(ALE, pendingForAle);
-          await sendText(JALIL, '✅ Enviado a Ale.');
-          pendingForAle = null;
-        } else {
-          await sendText(JALIL, 'No hay ningún briefing pendiente de aprobar.');
+    // Envolvemos el procesamiento: pase lo que pase, el usuario SIEMPRE recibe respuesta.
+    // (Regla de oro: el bot nunca se queda mudo.)
+    try {
+      if (from === JALIL) {
+        const t = text.toLowerCase();
+        if (t === 'ok' || t === 'ok!' || t === '👍') {
+          if (pendingForAle) {
+            await sendText(ALE, pendingForAle);
+            await sendText(JALIL, '✅ Enviado a Ale.');
+            pendingForAle = null;
+          } else {
+            await sendText(JALIL, 'No hay ningún briefing pendiente de aprobar.');
+          }
+          return;
         }
-        return;
+        if (t === 'no') {
+          pendingForAle = null;
+          await sendText(JALIL, '🗑️ Descartado. No se envió nada a Ale.');
+          return;
+        }
+        const cmd = await handleCommand(text, from);
+        if (cmd?.reply) {
+          await sendText(JALIL, cmd.reply);
+          return;
+        }
+        // No es un comando: responde la IA de forma natural (conversación + agenda).
+        await sendText(JALIL, await conversationalReply(from, text, 'Jalil'));
+      } else if (from === ALE) {
+        // Ale tiene acceso completo (agenda, crear eventos, asistente IA). Jalil se entera de todo.
+        // (No puede aprobar briefings: 'ok'/'no' solo se manejan en la rama de Jalil.)
+        const cmd = await handleCommand(text, from);
+        if (cmd?.reply) {
+          await sendText(ALE, cmd.reply);
+          await sendText(JALIL, `📩 Ale usó el bot: "${text}"`);
+          return;
+        }
+        // No es un comando: la IA le responde de forma natural, y avisamos a Jalil.
+        await sendText(ALE, await conversationalReply(from, text, 'Ale'));
+        await sendText(JALIL, `💬 Ale le escribió al bot: "${text}"`);
       }
-      if (t === 'no') {
-        pendingForAle = null;
-        await sendText(JALIL, '🗑️ Descartado. No se envió nada a Ale.');
-        return;
+    } catch (e) {
+      console.error('handler error:', e.message);
+      // Fallback: avisar al usuario (nunca silencio) y a Jalil del fallo.
+      try {
+        await sendText(from, '⚠️ Uf, algo se me cruzó procesando eso. ¿Me lo repites en un momento? Si sigue, avísame.');
+        if (from === ALE) await sendText(JALIL, `⚠️ Falló procesar un mensaje de Ale ("${text}"): ${e.message}`);
+      } catch (e2) {
+        console.error('fallback send error:', e2.message);
       }
-      const cmd = await handleCommand(text, from);
-      if (cmd?.reply) {
-        await sendText(JALIL, cmd.reply);
-        return;
-      }
-      // No es un comando: responde la IA de forma natural (conversación + agenda).
-      await sendText(JALIL, await conversationalReply(from, text, 'Jalil'));
-    } else if (from === ALE) {
-      // Ale tiene acceso completo (agenda, crear eventos, asistente IA). Jalil se entera de todo.
-      // (No puede aprobar briefings: 'ok'/'no' solo se manejan en la rama de Jalil.)
-      const cmd = await handleCommand(text, from);
-      if (cmd?.reply) {
-        await sendText(ALE, cmd.reply);
-        await sendText(JALIL, `📩 Ale usó el bot: "${text}"`);
-        return;
-      }
-      // No es un comando: la IA le responde de forma natural, y avisamos a Jalil.
-      await sendText(ALE, await conversationalReply(from, text, 'Ale'));
-      await sendText(JALIL, `💬 Ale le escribió al bot: "${text}"`);
     }
   } catch (e) {
     console.error('webhook error:', e.message);

@@ -14,6 +14,10 @@ import { addReminder, nextOccurrence, describeRepeat, listReminders, removeRemin
 import { getWeather } from './weather.js';
 import { getCity, setCity } from './settings.js';
 import { setPending } from './confirm.js';
+import { anthropic, jsonOf, textOf, AI_DOWN } from './ai.js';
+
+// Mensaje cuando la IA está caída/saturada (para no parecer "tonto" ni quedarse mudo).
+const SATURADO = '⚠️ Mi cerebro (IA) está saturado un segundo. Reinténtalo en unos instantes, por favor 🙏';
 
 const MONTHS_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 
@@ -21,10 +25,19 @@ const MONTHS_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio
 // Acepta: hoy, mañana, pasado mañana, un día de la semana (jueves, viernes...),
 // "DD/MM", "DD-MM", "DD de julio". Devuelve null si no lo entiende.
 export function resolveAgendaDay(rest) {
-  let w = (rest || '').trim().toLowerCase().replace(/^(el|del|para el)\s+/, '');
+  let w = (rest || '').trim().toLowerCase();
+  // Quitar prefijos de relleno ("el", "este", "próximo", "para el"...), hasta dos veces
+  // para casos como "el próximo lunes" o "para el día 5".
+  const STRIP = /^(este|esta|el|la|del|de|para|proximo|próximo|proxima|próxima)\s+/;
+  w = w.replace(STRIP, '').replace(STRIP, '').trim();
+
   if (!w || w === 'hoy') return madridDateParts(0);
   if (w === 'mañana' || w === 'manana') return madridDateParts(1);
-  if (w === 'pasado' || w === 'pasado mañana' || w === 'pasado manana') return madridDateParts(2);
+  if (/^pasado( ma[ñn]ana)?$/.test(w)) return madridDateParts(2);
+
+  // "en N días" / "dentro de N días"
+  let m = w.match(/^(?:en|dentro de)\s+(\d{1,3})\s+d[ií]as?$/);
+  if (m) return madridDateParts(Math.min(365, +m[1]));
 
   // Día de la semana → la próxima vez que ocurra (incluye hoy)
   if (DAY_NAMES[w] !== undefined) {
@@ -37,7 +50,7 @@ export function resolveAgendaDay(rest) {
   }
 
   // DD/MM o DD-MM (con año opcional)
-  let m = w.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
+  m = w.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
   if (m) {
     let y = m[3] ? +m[3] : madridDateParts(0).y;
     if (String(y).length === 2) y += 2000;
@@ -49,6 +62,18 @@ export function resolveAgendaDay(rest) {
   if (m) {
     const mo = MONTHS_ES.indexOf(m[2]) + 1;
     if (mo > 0) return { y: madridDateParts(0).y, m: mo, d: +m[1] };
+  }
+
+  // "día N" o un número suelto (1-31) → ese día de este mes; si ya pasó, el mes que viene
+  m = w.match(/^(?:d[ií]a\s+)?(\d{1,2})$/);
+  if (m) {
+    const d = +m[1];
+    if (d >= 1 && d <= 31) {
+      const t = madridDateParts(0);
+      let y = t.y, mo = t.m;
+      if (d < t.d) { mo += 1; if (mo > 12) { mo = 1; y += 1; } }
+      return { y, m: mo, d: Math.min(d, lastDayOfMonth(y, mo)) };
+    }
   }
   return null;
 }
@@ -167,96 +192,61 @@ function build(y, m, d, hh, mm) {
 // fallan con fechas relativas). Devuelve la PALABRA del día ("dayText") y nuestro
 // código la convierte en fecha exacta de forma determinista (resolveAgendaDay).
 export async function parseWithAI(text) {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5',
-      max_tokens: 300,
-      system:
-        'Extrae un evento de calendario del mensaje (en español). Responde SOLO con JSON, sin texto extra:\n' +
-        '{"summary":"...","dayText":"...","hh":21,"mm":0,"allDay":false,"calKey":"actividades|mentoria|personal|viajes","durMin":60}\n' +
-        '- summary: título corto y claro del evento.\n' +
-        '- dayText: SOLO la parte del día, tal cual se dice, SIN calcular fechas. Ejemplos válidos: "hoy", "mañana", "pasado mañana", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo", "25/07", "4 de agosto". Si no se menciona día, usa "hoy".\n' +
-        '- hh, mm: hora en formato 24h. Si NO hay hora, pon "allDay":true y omite hh/mm.\n' +
-        '- calKey: el calendario más adecuado (mentoria = llamadas/mentorías; viajes = vuelos/viajes; personal = personal; actividades = el resto).\n' +
-        '- durMin: duración en minutos (por defecto 60).',
-      messages: [{ role: 'user', content: text }],
-    }),
+  const r = await anthropic({
+    model: 'claude-haiku-4-5',
+    max_tokens: 300,
+    system:
+      'Extrae un evento de calendario del mensaje (en español). Responde SOLO con JSON, sin texto extra:\n' +
+      '{"summary":"...","dayText":"...","hh":21,"mm":0,"allDay":false,"calKey":"actividades|mentoria|personal|viajes","durMin":60}\n' +
+      '- summary: título corto y claro del evento.\n' +
+      '- dayText: SOLO la parte del día, tal cual se dice, SIN calcular fechas. Ejemplos válidos: "hoy", "mañana", "pasado mañana", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo", "25/07", "4 de agosto". Si no se menciona día, usa "hoy".\n' +
+      '- hh, mm: hora en formato 24h. Si NO hay hora, pon "allDay":true y omite hh/mm.\n' +
+      '- calKey: el calendario más adecuado (mentoria = llamadas/mentorías; viajes = vuelos/viajes; personal = personal; actividades = el resto).\n' +
+      '- durMin: duración en minutos (por defecto 60).',
+    messages: [{ role: 'user', content: text }],
   });
-  const data = await res.json();
-  try {
-    const txt = data.content?.[0]?.text || '';
-    return JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1));
-  } catch {
-    return null;
-  }
+  if (r.down) return AI_DOWN;
+  if (!r.ok) return null;
+  return jsonOf(r.data);
 }
 
 // Asistente de IA de propósito general (redactar, resumir, traducir, responder).
 export async function askAI(prompt) {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5',
-      max_tokens: 1024,
-      system:
-        'Eres el asistente personal de Jalil, que gestiona la agenda y las tareas de su jefe (Ale). ' +
-        'Ayuda con lo que te pida: redactar mensajes o correos (da el texto final, listo para copiar), ' +
-        'resumir textos largos, traducir (español, inglés, árabe) y responder preguntas. ' +
-        'Sé claro, útil y conciso: es por WhatsApp. Responde en el idioma de la petición. ' +
-        'Da directamente el resultado, sin explicar tu razonamiento ni añadir preámbulos.',
-      messages: [{ role: 'user', content: prompt }],
-    }),
+  const r = await anthropic({
+    model: 'claude-haiku-4-5',
+    max_tokens: 1024,
+    system:
+      'Eres el asistente personal de Jalil, que gestiona la agenda y las tareas de su jefe (Ale). ' +
+      'Ayuda con lo que te pida: redactar mensajes o correos (da el texto final, listo para copiar), ' +
+      'resumir textos largos, traducir (español, inglés, árabe) y responder preguntas. ' +
+      'Sé claro, útil y conciso: es por WhatsApp. Responde en el idioma de la petición. ' +
+      'Da directamente el resultado, sin explicar tu razonamiento ni añadir preámbulos.',
+    messages: [{ role: 'user', content: prompt }],
   });
-  const data = await res.json();
-  return data.content?.[0]?.text?.trim() || null;
+  if (!r.ok) return null;
+  return textOf(r.data) || null;
 }
 
 // La IA extrae el recordatorio (qué + cuándo). El código calcula la hora exacta.
 export async function parseReminderAI(text) {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5',
-      max_tokens: 220,
-      system:
-        'Extrae un recordatorio del mensaje (en español). Responde SOLO con JSON, sin texto extra:\n' +
-        '{"what":"...","dayText":"...","hh":10,"mm":0,"inMinutes":null,"repeat":null,"dow":null,"dom":null}\n' +
-        '- what: qué hay que recordar, corto y claro.\n' +
-        '- repeat: null si es una sola vez. "diario" si dice "cada día"/"todos los días". "semanal" si dice "cada lunes"/"todos los martes"... "mensual" si dice "cada día X del mes"/"el X de cada mes"/"todos los meses el X".\n' +
-        '- dow: SOLO para "semanal", el día como número (0=domingo,1=lunes,2=martes,3=miércoles,4=jueves,5=viernes,6=sábado).\n' +
-        '- dom: SOLO para "mensual", el número de día del mes (1-31).\n' +
-        '- hh, mm: hora del aviso en 24h (si no se dice, hh:9, mm:0). En recurrentes, dayText puede ir null.\n' +
-        '- Si dice "en X minutos/horas" (una sola vez), pon inMinutes con el total de minutos (2 horas = 120) y el resto null.\n' +
-        '- Si es una sola vez con día concreto, rellena dayText con la palabra del día ("hoy","mañana","lunes"..."domingo","25/07","4 de agosto") — NO calcules la fecha.',
-      messages: [{ role: 'user', content: text }],
-    }),
+  const r = await anthropic({
+    model: 'claude-haiku-4-5',
+    max_tokens: 220,
+    system:
+      'Extrae un recordatorio del mensaje (en español). Responde SOLO con JSON, sin texto extra:\n' +
+      '{"what":"...","dayText":"...","hh":10,"mm":0,"inMinutes":null,"repeat":null,"dow":null,"dom":null}\n' +
+      '- what: qué hay que recordar, corto y claro.\n' +
+      '- repeat: null si es una sola vez. "diario" si dice "cada día"/"todos los días". "semanal" si dice "cada lunes"/"todos los martes"... "mensual" si dice "cada día X del mes"/"el X de cada mes"/"todos los meses el X".\n' +
+      '- dow: SOLO para "semanal", el día como número (0=domingo,1=lunes,2=martes,3=miércoles,4=jueves,5=viernes,6=sábado).\n' +
+      '- dom: SOLO para "mensual", el número de día del mes (1-31).\n' +
+      '- hh, mm: hora del aviso en 24h (si no se dice, hh:9, mm:0). En recurrentes, dayText puede ir null.\n' +
+      '- Si dice "en X minutos/horas" (una sola vez), pon inMinutes con el total de minutos (2 horas = 120) y el resto null.\n' +
+      '- Si es una sola vez con día concreto, rellena dayText con la palabra del día ("hoy","mañana","lunes"..."domingo","25/07","4 de agosto") — NO calcules la fecha.',
+    messages: [{ role: 'user', content: text }],
   });
-  const data = await res.json();
-  try {
-    const txt = data.content?.[0]?.text || '';
-    return JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1));
-  } catch {
-    return null;
-  }
+  if (r.down) return AI_DOWN;
+  if (!r.ok) return null;
+  return jsonOf(r.data);
 }
 
 // Normaliza texto (minúsculas, sin acentos) para comparar títulos de eventos
@@ -274,34 +264,21 @@ function fmtEventLine(it) {
 
 // La IA extrae la intención de gestionar un evento (cancelar o mover).
 export async function parseManageAI(text) {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5',
-      max_tokens: 200,
-      system:
-        'El usuario quiere CANCELAR o MOVER un evento de su calendario. Responde SOLO con JSON:\n' +
-        '{"action":"cancel","keyword":"...","dayText":"...","newDayText":null,"newHh":null,"newMm":null}\n' +
-        '- action: "cancel" si dice cancelar/borrar/eliminar/quitar/anular; "move" si dice mover/cambiar/reprogramar.\n' +
-        '- keyword: palabra(s) clave para encontrar el evento (ej: "comida", "reunión con Juan").\n' +
-        '- dayText: el día ACTUAL del evento (hoy/mañana/pasado mañana/lunes..domingo/25-07/4 de agosto), SIN calcular fecha. Si no se dice, "hoy".\n' +
-        '- Solo para "move": newDayText (nuevo día si cambia, o null si es el mismo día) y newHh/newMm (nueva hora en 24h). Para "cancel", deja esos tres en null.',
-      messages: [{ role: 'user', content: text }],
-    }),
+  const r = await anthropic({
+    model: 'claude-haiku-4-5',
+    max_tokens: 200,
+    system:
+      'El usuario quiere CANCELAR o MOVER un evento de su calendario. Responde SOLO con JSON:\n' +
+      '{"action":"cancel","keyword":"...","dayText":"...","newDayText":null,"newHh":null,"newMm":null}\n' +
+      '- action: "cancel" si dice cancelar/borrar/eliminar/quitar/anular; "move" si dice mover/cambiar/reprogramar.\n' +
+      '- keyword: palabra(s) clave para encontrar el evento (ej: "comida", "reunión con Juan").\n' +
+      '- dayText: el día ACTUAL del evento (hoy/mañana/pasado mañana/lunes..domingo/25-07/4 de agosto), SIN calcular fecha. Si no se dice, "hoy".\n' +
+      '- Solo para "move": newDayText (nuevo día si cambia, o null si es el mismo día) y newHh/newMm (nueva hora en 24h). Para "cancel", deja esos tres en null.',
+    messages: [{ role: 'user', content: text }],
   });
-  const data = await res.json();
-  try {
-    const txt = data.content?.[0]?.text || '';
-    return JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1));
-  } catch {
-    return null;
-  }
+  if (r.down) return AI_DOWN;
+  if (!r.ok) return null;
+  return jsonOf(r.data);
 }
 
 export async function handleCommand(text, from) {
@@ -362,6 +339,7 @@ export async function handleCommand(text, from) {
   // "cancela/mueve ..." : gestionar un evento existente (cancelar o mover)
   if (/^(cancela|borra|elimina|quita|anula|mueve|reprograma|cambia)\b/i.test(t)) {
     const p = await parseManageAI(text);
+    if (p === AI_DOWN) return { reply: SATURADO };
     if (!p || !p.keyword) {
       return {
         reply: 'Dime qué evento y de qué día 🗓️. Ej: "cancela la comida del jueves" o "mueve la reunión del viernes a las 5".',
@@ -442,6 +420,7 @@ export async function handleCommand(text, from) {
   // "recuérdame ...": crear un recordatorio que avisa a la hora indicada
   if (/^(recu[eé]rdame|recu[eé]rda|recordar|recordatorio)\b/i.test(t)) {
     const r = await parseReminderAI(text);
+    if (r === AI_DOWN) return { reply: SATURADO };
     if (!r || !r.what) {
       return {
         reply:
@@ -537,6 +516,7 @@ export async function handleCommand(text, from) {
     // 2) Lenguaje natural con IA: la IA saca los datos, el código calcula la fecha.
     if (!parsed) {
       const ai = await parseWithAI(text);
+      if (ai === AI_DOWN) return { reply: SATURADO };
       if (ai && ai.summary) {
         const dp = resolveAgendaDay(ai.dayText || 'hoy');
         if (dp) {
