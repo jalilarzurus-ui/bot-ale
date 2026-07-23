@@ -12,7 +12,7 @@ import { createEvent, deleteEvent, moveEvent, eventsForDateParts, eventsForRange
 import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda, weeklyBriefing } from './briefing.js';
 import { addReminder, nextOccurrence, describeRepeat, listReminders, removeReminder } from './reminders.js';
 import { getWeather } from './weather.js';
-import { getCity, setCity } from './settings.js';
+import { getCity, setCity, getAlertsOn, setAlertsOn, getAlertLead, setAlertLead } from './settings.js';
 import { setPending } from './confirm.js';
 import { anthropic, jsonOf, textOf, AI_DOWN, MODEL_FAST, MODEL_SMART } from './ai.js';
 
@@ -550,6 +550,28 @@ export async function handleCommand(text, from) {
   // "resumen semana" / "resumen" / "semana que viene" → semana entera de un vistazo
   if (/^(resumen|semana que viene)\b/i.test(t) || t === 'semana') {
     return { reply: await weeklyBriefing() };
+  }
+
+  // "avisos" : controlar los avisos automáticos antes de cada evento
+  if (/^avisos?\b/i.test(t)) {
+    const rest = t.replace(/^avisos?\s*/i, '').trim();
+    if (/^(off|no|desactiva|apaga|quita)/.test(rest)) {
+      setAlertsOn(false);
+      return { reply: '🔕 Avisos antes de eventos *desactivados*. Actívalos con "avisos on".' };
+    }
+    if (/^(on|si|sí|activa|enciende)/.test(rest)) {
+      setAlertsOn(true);
+      return { reply: `🔔 Avisos *activados*. Te aviso ${getAlertLead()} min antes de cada evento.` };
+    }
+    const num = rest.match(/(\d{1,3})/);
+    if (num) {
+      const min = Math.min(240, Math.max(1, Number(num[1])));
+      setAlertLead(min);
+      setAlertsOn(true);
+      return { reply: `🔔 Hecho. Te avisaré *${min} min* antes de cada evento.` };
+    }
+    const estado = getAlertsOn() ? `activados (${getAlertLead()} min antes)` : 'desactivados';
+    return { reply: `🔔 Avisos antes de eventos: *${estado}*.\nCambia con "avisos 15" (minutos), "avisos off" o "avisos on".` };
   }
 
   // "agenda <cuándo>": día suelto o periodo (semana, mes, un mes concreto...)

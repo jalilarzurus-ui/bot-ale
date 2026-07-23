@@ -30,3 +30,23 @@ export function setCity(city) {
   settings.city = city;
   persist();
 }
+
+// --- Avisos automáticos antes de cada evento ---
+export function getAlertsOn() {
+  return settings.alertsOn !== false; // por defecto activados
+}
+
+export function setAlertsOn(on) {
+  settings.alertsOn = !!on;
+  persist();
+}
+
+export function getAlertLead() {
+  const n = Number(settings.alertLeadMin);
+  return Number.isFinite(n) && n >= 1 && n <= 240 ? n : 30; // por defecto 30 min
+}
+
+export function setAlertLead(min) {
+  settings.alertLeadMin = min;
+  persist();
+}

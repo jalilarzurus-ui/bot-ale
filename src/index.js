@@ -11,6 +11,8 @@ import { handleCommand } from './commands.js';
 import { conversationalReply } from './assistant.js';
 import { dueReminders, removeReminders, updateReminderDue, nextOccurrence } from './reminders.js';
 import { getPending, clearPending, isYes, isNo } from './confirm.js';
+import { eventsForDay, CALENDARS, TZ } from './calendar.js';
+import { getAlertsOn, getAlertLead } from './settings.js';
 
 const app = express();
 app.use(express.json());
@@ -53,6 +55,45 @@ cron.schedule('* * * * *', async () => {
     removeReminders(done);
   } catch (e) {
     console.error('reminder cron error:', e.message);
+  }
+});
+
+// Avisos automáticos antes de cada evento: cada 5 min mira la agenda de hoy y avisa
+// a Jalil de lo que empieza dentro de los próximos N minutos (por defecto 30). Una sola vez por evento.
+const alerted = new Set(); // ids de eventos ya avisados
+let alertedDay = '';
+cron.schedule('*/5 * * * *', async () => {
+  try {
+    if (!getAlertsOn()) return;
+    // Reset diario del registro de avisados (para no crecer sin fin)
+    const dayKey = new Date().toLocaleDateString('en-CA', { timeZone: TZ });
+    if (dayKey !== alertedDay) { alerted.clear(); alertedDay = dayKey; }
+
+    const leadMs = getAlertLead() * 60000;
+    const now = Date.now();
+    const { events } = await eventsForDay(0);
+    for (const it of events) {
+      const dt = it.ev.start?.dateTime;
+      if (!dt) continue; // eventos de todo el día no llevan aviso "en X min"
+      const startMs = new Date(dt).getTime();
+      const diff = startMs - now;
+      // Aún no empezó y arranca dentro de la ventana de aviso
+      if (diff > 0 && diff <= leadMs && !alerted.has(it.ev.id)) {
+        alerted.add(it.ev.id);
+        const mins = Math.max(1, Math.round(diff / 60000));
+        const hora = new Date(dt).toLocaleTimeString('es-ES', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+        const cal = CALENDARS[it.calKey];
+        const tag = cal?.emoji ? ` ${cal.emoji}` : '';
+        try {
+          await sendText(JALIL, `⏰ *En ${mins} min:* ${it.ev.summary} (${hora})${tag}`);
+        } catch (e) {
+          console.error('alert send error:', e.message);
+          alerted.delete(it.ev.id); // si falló el envío, permitir reintento en la próxima pasada
+        }
+      }
+    }
+  } catch (e) {
+    console.error('event alert cron error:', e.message);
   }
 });
 
