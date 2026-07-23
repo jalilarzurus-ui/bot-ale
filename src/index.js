@@ -7,6 +7,7 @@ import cron from 'node-cron';
 import { morningDaily, nightBriefing } from './briefing.js';
 import { sendText, flushQueue } from './whatsapp.js';
 import { handleCommand } from './commands.js';
+import { conversationalReply } from './assistant.js';
 import { dueReminders, removeReminders } from './reminders.js';
 
 const app = express();
@@ -104,10 +105,8 @@ app.post('/webhook', async (req, res) => {
         await sendText(JALIL, cmd.reply);
         return;
       }
-      await sendText(
-        JALIL,
-        'Comandos: *ok* (aprobar y enviar a Ale) · *no* (descartar) · *agenda hoy* · *agenda mañana* · *agrega: Título | martes 21:00 | personal*',
-      );
+      // No es un comando: responde la IA de forma natural (conversación + agenda).
+      await sendText(JALIL, await conversationalReply(from, text));
     } else if (from === ALE) {
       // Ale tiene acceso completo (agenda, crear eventos, asistente IA). Jalil se entera de todo.
       // (No puede aprobar briefings: 'ok'/'no' solo se manejan en la rama de Jalil.)
@@ -117,12 +116,9 @@ app.post('/webhook', async (req, res) => {
         await sendText(JALIL, `📩 Ale usó el bot: "${text}"`);
         return;
       }
-      // No es un comando conocido: bienvenida/ayuda + aviso a Jalil.
-      await sendText(
-        ALE,
-        '👋 ¡Hola Ale! Soy tu asistente. Puedo ayudarte con:\n\n📅 *Tu agenda* — "agenda hoy", "agenda viernes", "agenda esta semana", "agenda agosto"...\n➕ *Apuntar cosas* — "anota comida con el equipo el jueves a las 3pm"\n🤖 *Asistente IA* (escribe *ia* delante) — "ia redáctame un correo...", "ia traduce al inglés: ...", "ia resume esto: ..."\n\nEscríbeme lo que necesites, cuando quieras 🙌',
-      );
-      await sendText(JALIL, `💬 Ale escribió al bot: "${text}"`);
+      // No es un comando: la IA le responde de forma natural, y avisamos a Jalil.
+      await sendText(ALE, await conversationalReply(from, text));
+      await sendText(JALIL, `💬 Ale le escribió al bot: "${text}"`);
     }
   } catch (e) {
     console.error('webhook error:', e.message);
