@@ -88,21 +88,18 @@ app.post('/webhook', async (req, res) => {
         'Comandos: *ok* (aprobar y enviar a Ale) · *no* (descartar) · *agenda hoy* · *agenda mañana* · *agrega: Título | martes 21:00 | personal*',
       );
     } else if (from === ALE) {
-      // Ale puede consultar su agenda directamente (solo lectura).
-      // Ale puede consultar la agenda de cualquier día (solo lectura): "agenda viernes", etc.
-      if (/^agenda\b/i.test(text.trim())) {
-        const cmd = await handleCommand(text);
-        if (cmd?.reply) {
-          await sendText(ALE, cmd.reply);
-          // Aviso a Jalil para que esté al tanto de lo que Ale consulta.
-          await sendText(JALIL, `📩 Ale le pidió al bot: *${text}* — se la envié directamente a él.`);
-          return;
-        }
+      // Ale tiene acceso completo (agenda, crear eventos, asistente IA). Jalil se entera de todo.
+      // (No puede aprobar briefings: 'ok'/'no' solo se manejan en la rama de Jalil.)
+      const cmd = await handleCommand(text);
+      if (cmd?.reply) {
+        await sendText(ALE, cmd.reply);
+        await sendText(JALIL, `📩 Ale usó el bot: "${text}"`);
+        return;
       }
-      // Cualquier otra cosa: bienvenida/ayuda cálida a Ale y aviso a Jalil.
+      // No es un comando conocido: bienvenida/ayuda + aviso a Jalil.
       await sendText(
         ALE,
-        '👋 ¡Hola Ale! Soy tu asistente de agenda. Escríbeme cuando quieras y te digo qué tienes en tu día:\n\n• *agenda hoy*\n• *agenda mañana*\n• *agenda viernes* (o cualquier día)\n• *agenda esta semana*\n• *agenda agosto* (o cualquier mes)\n\nLo que necesites saber de tu agenda, aquí estoy. Para cualquier otra cosa, Jalil está pendiente. 🙌',
+        '👋 ¡Hola Ale! Soy tu asistente. Puedo ayudarte con:\n\n📅 *Tu agenda* — "agenda hoy", "agenda viernes", "agenda esta semana", "agenda agosto"...\n➕ *Apuntar cosas* — "anota comida con el equipo el jueves a las 3pm"\n🤖 *Asistente IA* (escribe *ia* delante) — "ia redáctame un correo...", "ia traduce al inglés: ...", "ia resume esto: ..."\n\nEscríbeme lo que necesites, cuando quieras 🙌',
       );
       await sendText(JALIL, `💬 Ale escribió al bot: "${text}"`);
     }
