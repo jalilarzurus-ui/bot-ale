@@ -31,8 +31,12 @@ function norm(text) {
     .trim().replace(/\s+/g, ' ');
 }
 
-const YES = /^(si|sip|sisi|claro|dale|hazlo|confirmo|confirmar|confirmado|correcto|corecto|adelante|de una|eso|eso es|asi es|exacto|procede|proceder|de acuerdo|ok si|vale si|perfecto|va)\b/;
-const NO = /^(no|nel|nop|dejalo|dejala|olvidalo|olvidala|mejor no|para|espera|cancela eso|asi no|nada|negativo)\b/;
+// Coincidencia COMPLETA (^...$), no solo el inicio: así "claro que no", "va a llover"
+// o "para mañana" NO se toman por sí/no. Ante la duda, no se confirma (seguro por defecto).
+// Se permite un cierre de cortesía opcional ("por favor", "porfa", "gracias").
+const CORTESIA = '(?:\\s+(?:por\\s+favor|porfa|gracias|please))?';
+const YES = new RegExp('^(?:si|sisi|si si|sip|claro|claro que si|dale|dale si|si dale|hazlo|hazlo ya|si hazlo|confirmo|confirmar|confirmado|correcto|adelante|exacto|eso es|eso mismo|asi es|de una|de acuerdo|procede|ok|oka|okey|okay|vale|va|perfecto|obvio)' + CORTESIA + '$');
+const NO = new RegExp('^(?:no|no no|nel|nop|nope|para nada|dejalo|dejala|dejalo asi|olvidalo|olvidala|mejor no|no gracias|nada|negativo|cancelalo|cancela eso|asi no|no lo hagas|no hagas nada|dejalo estar)' + CORTESIA + '$');
 
 export function isYes(text) {
   return YES.test(norm(text));

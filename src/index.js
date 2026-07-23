@@ -9,7 +9,7 @@ import { sendText, flushQueue, getMedia } from './whatsapp.js';
 import { transcribe } from './transcribe.js';
 import { handleCommand } from './commands.js';
 import { conversationalReply } from './assistant.js';
-import { dueReminders, removeReminders, updateReminderDue, nextOccurrence } from './reminders.js';
+import { dueReminders, removeReminders, updateReminderDue, nextOccurrence, setLastFired } from './reminders.js';
 import { getPending, clearPending, isYes, isNo } from './confirm.js';
 import { eventsForDay, CALENDARS, TZ } from './calendar.js';
 import { getAlertsOn, getAlertLead } from './settings.js';
@@ -40,6 +40,7 @@ cron.schedule('* * * * *', async () => {
     for (const r of due) {
       try {
         await sendText(r.chatId, `⏰ *Recordatorio:* ${r.text}`);
+        setLastFired(r.chatId, r.text); // por si quiere "posponer" el que acaba de sonar
       } catch (e) {
         console.error('reminder send error:', e.message);
       }

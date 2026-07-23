@@ -24,10 +24,19 @@ function persist() {
   }
 }
 
-// r = { id, chatId, text, dueTs }
+// r = { id, chatId, text, dueTs, repeat? }
 export function addReminder(r) {
   reminders.push(r);
   persist();
+}
+
+// Último recordatorio que sonó por chat (para poder "posponerlo").
+const lastFired = new Map();
+export function setLastFired(chatId, text) {
+  lastFired.set(chatId, text);
+}
+export function getLastFired(chatId) {
+  return lastFired.get(chatId) || null;
 }
 
 export function dueReminders(nowTs) {

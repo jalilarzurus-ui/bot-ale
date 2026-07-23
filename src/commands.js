@@ -10,7 +10,7 @@
 // "agrega" se interpreta con IA en lenguaje natural.
 import { createEvent, deleteEvent, moveEvent, eventsForDateParts, eventsForRange, overlappingEvents, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
 import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda, weeklyBriefing } from './briefing.js';
-import { addReminder, nextOccurrence, describeRepeat, listReminders, removeReminder } from './reminders.js';
+import { addReminder, nextOccurrence, describeRepeat, listReminders, removeReminder, getLastFired } from './reminders.js';
 import { getWeather } from './weather.js';
 import { getCity, setCity, getAlertsOn, setAlertsOn, getAlertLead, setAlertLead } from './settings.js';
 import { setPending } from './confirm.js';
@@ -272,6 +272,25 @@ function fmtEventFull(it) {
   return `${cal?.emoji ? cal.emoji + ' ' : ''}*${it.ev.summary}* — ${cuando}${cal ? ` (${cal.label})` : ''}`;
 }
 
+// Interpreta un retraso en minutos de frases como "1 hora", "30 min", "media hora",
+// "un cuarto de hora", "2h", o un número suelto (= minutos). Devuelve null si no hay nada.
+function parseDelayMin(s) {
+  const w = (s || '').toLowerCase();
+  if (/media\s+hora/.test(w)) return 30;
+  if (/(un\s+)?cuarto(\s+de\s+hora)?/.test(w)) return 15;
+  let total = 0, found = false;
+  const h = w.match(/(\d+)\s*(?:h|horas?)\b/);
+  if (h) { total += Number(h[1]) * 60; found = true; }
+  const m = w.match(/(\d+)\s*(?:m|min|minutos?)\b/);
+  if (m) { total += Number(m[1]); found = true; }
+  if (!found && /\b(una|1)\s+horas?\b/.test(w)) { total = 60; found = true; }
+  if (!found) {
+    const n = w.match(/(\d+)/); // número suelto → minutos
+    if (n) { total = Number(n[1]); found = true; }
+  }
+  return found ? Math.min(total, 24 * 60) : null;
+}
+
 // Busca eventos por palabra clave en una ventana de días (por defecto ~3 meses)
 export async function searchEvents(keyword, days = 92) {
   const k = norm(keyword).trim();
@@ -352,6 +371,20 @@ export async function handleCommand(text, from) {
       });
       return { reply: `📋 Tus recordatorios (${rs.length}):\n${lines.join('\n')}\n\nPara borrar uno: "cancela recordatorio 2".` };
     }
+  }
+
+  // POSPONER el último recordatorio que sonó: "pospón 1 hora", "recuérdamelo en 30 min", "más tarde".
+  if (/^(pospon|pospón|posponer|recu[eé]rdamelo|m[aá]s tarde|luego)\b/i.test(t)) {
+    const last = getLastFired(from);
+    if (!last) {
+      return { reply: 'No tengo ningún recordatorio reciente que posponer 🤔. Crea uno con "recuérdame ..." o dime "recuérdame X en 30 min".' };
+    }
+    const min = parseDelayMin(t) ?? 15;
+    const dueTs = Date.now() + min * 60000;
+    addReminder({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, chatId: from, text: last, dueTs });
+    const cuando = new Date(dueTs).toLocaleTimeString('es-ES', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+    const cuanto = min >= 60 && min % 60 === 0 ? `${min / 60} h` : `${min} min`;
+    return { reply: `⏰ Vale, te lo recuerdo otra vez en *${cuanto}*: *${last}* (a las ${cuando}).` };
   }
 
   // BUSCAR eventos por palabra clave ("¿cuándo es el vuelo?", "busca la reunión con Juan").
