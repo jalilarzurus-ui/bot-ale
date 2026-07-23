@@ -10,6 +10,7 @@ import { getCity } from './settings.js';
 import { addReminder, listReminders, removeReminder, nextOccurrence, describeRepeat } from './reminders.js';
 import { getWeather } from './weather.js';
 import { resolveAgendaDay, resolveAgendaRange } from './commands.js';
+import { setPending } from './confirm.js';
 
 const histories = new Map(); // chatId -> [{ role, content }]
 const MAX_TURNS = 10;
@@ -179,8 +180,15 @@ async function executeTool(name, input, ctx) {
       if (matches.length > 1) return `Hay varios el ${dp.d}/${dp.m}: ${matches.map((it) => it.ev.summary).join('; ')}. Pide al usuario que precise cuál (nombre u hora).`;
       const it = matches[0];
       if (name === 'cancelar_evento') {
-        await deleteEvent(it.calKey, it.ev.id);
-        return `OK. Cancelado: "${it.ev.summary}" del ${dp.d}/${dp.m}.`;
+        setPending(ctx.chatId, {
+          describe: `cancelar "${it.ev.summary}"`,
+          exec: async () => {
+            try { await deleteEvent(it.calKey, it.ev.id); }
+            catch (e) { return `⚠️ No pude cancelarlo: ${e?.errors?.[0]?.message || e.message}`; }
+            return `🗑️ Cancelado: "${it.ev.summary}" del ${dp.d}/${dp.m}.`;
+          },
+        });
+        return `CONFIRMACIÓN NECESARIA: no está cancelado todavía. Pide al usuario que confirme que cancele "${it.ev.summary}" del ${dp.d}/${dp.m} respondiendo "sí".`;
       }
       // mover
       const target = input.newDayText ? resolveAgendaDay(input.newDayText) : dp;
@@ -190,8 +198,16 @@ async function executeTool(name, input, ctx) {
       if (it.ev.start?.dateTime && it.ev.end?.dateTime) {
         durMin = Math.max(15, Math.round((new Date(it.ev.end.dateTime) - new Date(it.ev.start.dateTime)) / 60000));
       }
-      await moveEvent(it.calKey, it.ev.id, target.y, target.m, target.d, input.newHh, input.newMm ?? 0, durMin);
-      return `OK. Movido: "${it.ev.summary}" a ${target.d}/${target.m} ${String(input.newHh).padStart(2, '0')}:${String(input.newMm ?? 0).padStart(2, '0')}.`;
+      const nuevaHora = `${String(input.newHh).padStart(2, '0')}:${String(input.newMm ?? 0).padStart(2, '0')}`;
+      setPending(ctx.chatId, {
+        describe: `mover "${it.ev.summary}"`,
+        exec: async () => {
+          try { await moveEvent(it.calKey, it.ev.id, target.y, target.m, target.d, input.newHh, input.newMm ?? 0, durMin); }
+          catch (e) { return `⚠️ No pude moverlo: ${e?.errors?.[0]?.message || e.message}`; }
+          return `📅 Movido: "${it.ev.summary}" a ${target.d}/${target.m} ${nuevaHora}.`;
+        },
+      });
+      return `CONFIRMACIÓN NECESARIA: no está movido todavía. Pide al usuario que confirme mover "${it.ev.summary}" a ${target.d}/${target.m} a las ${nuevaHora} respondiendo "sí".`;
     }
 
     if (name === 'poner_recordatorio') {

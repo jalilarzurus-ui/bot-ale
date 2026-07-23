@@ -13,6 +13,7 @@ import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda } from '.
 import { addReminder, nextOccurrence, describeRepeat } from './reminders.js';
 import { getWeather } from './weather.js';
 import { getCity, setCity } from './settings.js';
+import { setPending } from './confirm.js';
 
 const MONTHS_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 
@@ -336,21 +337,38 @@ export async function handleCommand(text, from) {
       if (it.ev.start?.dateTime && it.ev.end?.dateTime) {
         durMin = Math.max(15, Math.round((new Date(it.ev.end.dateTime) - new Date(it.ev.start.dateTime)) / 60000));
       }
-      try {
-        await moveEvent(it.calKey, it.ev.id, target.y, target.m, target.d, p.newHh, p.newMm ?? 0, durMin);
-      } catch (e) {
-        return { reply: `⚠️ No pude moverlo: ${e?.errors?.[0]?.message || e.message}` };
-      }
+      const nuevaHora = `${String(p.newHh).padStart(2, '0')}:${String(p.newMm ?? 0).padStart(2, '0')}`;
+      // No movemos de golpe: pedimos confirmación.
+      setPending(from, {
+        describe: `mover "${it.ev.summary}"`,
+        exec: async () => {
+          try {
+            await moveEvent(it.calKey, it.ev.id, target.y, target.m, target.d, p.newHh, p.newMm ?? 0, durMin);
+          } catch (e) {
+            return `⚠️ No pude moverlo: ${e?.errors?.[0]?.message || e.message}`;
+          }
+          return `📅 Movido: *${it.ev.summary}* → ${target.d}/${target.m} ${nuevaHora} (${CALENDARS[it.calKey].label})`;
+        },
+      });
       return {
-        reply: `📅 Movido: *${it.ev.summary}* → ${target.d}/${target.m} ${String(p.newHh).padStart(2, '0')}:${String(p.newMm ?? 0).padStart(2, '0')} (${CALENDARS[it.calKey].label})`,
+        reply: `¿Muevo *${it.ev.summary}* a *${target.d}/${target.m} a las ${nuevaHora}*? (${CALENDARS[it.calKey].label})\nResponde *sí* para confirmar o *no* para dejarlo.`,
       };
     }
-    try {
-      await deleteEvent(it.calKey, it.ev.id);
-    } catch (e) {
-      return { reply: `⚠️ No pude cancelarlo: ${e?.errors?.[0]?.message || e.message}` };
-    }
-    return { reply: `🗑️ Cancelado: *${it.ev.summary}* — ${dp.d}/${dp.m} (${CALENDARS[it.calKey].label})` };
+    // Cancelar: pedimos confirmación antes de borrar.
+    setPending(from, {
+      describe: `cancelar "${it.ev.summary}"`,
+      exec: async () => {
+        try {
+          await deleteEvent(it.calKey, it.ev.id);
+        } catch (e) {
+          return `⚠️ No pude cancelarlo: ${e?.errors?.[0]?.message || e.message}`;
+        }
+        return `🗑️ Cancelado: *${it.ev.summary}* — ${dp.d}/${dp.m} (${CALENDARS[it.calKey].label})`;
+      },
+    });
+    return {
+      reply: `¿Seguro que cancelo *${it.ev.summary}* del *${dp.d}/${dp.m}*? (${CALENDARS[it.calKey].label})\nResponde *sí* para confirmar o *no* para dejarlo.`,
+    };
   }
 
   // "ciudad ..." / "estamos en ...": fija la ciudad actual (para el clima del daily)

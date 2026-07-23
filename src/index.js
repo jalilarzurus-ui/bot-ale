@@ -10,6 +10,7 @@ import { transcribe } from './transcribe.js';
 import { handleCommand } from './commands.js';
 import { conversationalReply } from './assistant.js';
 import { dueReminders, removeReminders, updateReminderDue, nextOccurrence } from './reminders.js';
+import { getPending, clearPending, isYes, isNo } from './confirm.js';
 
 const app = express();
 app.use(express.json());
@@ -109,6 +110,25 @@ app.post('/webhook', async (req, res) => {
 
     // abrir ventana de 24h: entregar mensajes retenidos
     await flushQueue(from);
+
+    // ¿Hay una acción peligrosa a medias (cancelar/mover evento) esperando "sí"?
+    const pend = getPending(from);
+    if (pend) {
+      if (isYes(text)) {
+        clearPending(from);
+        const res = await pend.exec();
+        await sendText(from, res);
+        if (from === ALE) await sendText(JALIL, `📩 Ale confirmó (${pend.describe}): ${res}`);
+        return;
+      }
+      if (isNo(text)) {
+        clearPending(from);
+        await sendText(from, '👍 Vale, lo dejo como está. No toqué nada.');
+        return;
+      }
+      // Cualquier otra cosa: olvidamos el pendiente y seguimos con el mensaje normal.
+      clearPending(from);
+    }
 
     if (from === JALIL) {
       const t = text.toLowerCase();
