@@ -4,7 +4,7 @@
 //        Jalil también puede escribir "agrega: ..." para crear eventos.
 import express from 'express';
 import cron from 'node-cron';
-import { morningDaily, nightBriefing } from './briefing.js';
+import { morningDaily, nightBriefing, weeklyBriefing } from './briefing.js';
 import { sendText, flushQueue, getMedia } from './whatsapp.js';
 import { transcribe } from './transcribe.js';
 import { handleCommand } from './commands.js';
@@ -26,6 +26,8 @@ let pendingForAle = null;
 // 23:00 → agenda del día siguiente, antes de dormir.
 cron.schedule('0 7 * * *', () => runBriefing('morning'), { timezone: 'Europe/Madrid' });
 cron.schedule('0 23 * * *', () => runBriefing('night'), { timezone: 'Europe/Madrid' });
+// Domingo 20:00 → resumen de la semana que viene (para planificar con Ale).
+cron.schedule('0 20 * * 0', () => runBriefing('week'), { timezone: 'Europe/Madrid' });
 
 // Recordatorios: cada minuto, avisa de los que ya toca.
 cron.schedule('* * * * *', async () => {
@@ -56,9 +58,13 @@ cron.schedule('* * * * *', async () => {
 
 async function runBriefing(kind) {
   try {
-    const msg = kind === 'morning' ? await morningDaily() : await nightBriefing();
+    const msg = kind === 'morning' ? await morningDaily()
+      : kind === 'week' ? await weeklyBriefing()
+      : await nightBriefing();
     pendingForAle = msg;
-    const header = kind === 'morning' ? '🌅 Daily de hoy (agenda).' : '🌙 Agenda de mañana.';
+    const header = kind === 'morning' ? '🌅 Daily de hoy (agenda).'
+      : kind === 'week' ? '🗓️ Resumen de la semana que viene.'
+      : '🌙 Agenda de mañana.';
     await sendText(JALIL, `${header} Responde *ok* para enviárselo a Ale, o *no* para descartarlo:\n\n${msg}`);
     console.log(`[${kind}] briefing enviado a Jalil`);
   } catch (e) {

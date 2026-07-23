@@ -1,5 +1,5 @@
 // Redacción de los mensajes de briefing (formato WhatsApp)
-import { eventsForDay, eventsForDateParts, eventsForRange, TZ } from './calendar.js';
+import { eventsForDay, eventsForDateParts, eventsForRange, madridDateParts, TZ } from './calendar.js';
 import { getWeather } from './weather.js';
 import { getCity } from './settings.js';
 
@@ -75,6 +75,31 @@ export async function nightBriefing() {
     for (const item of tomorrow.events) lines.push(eventLine(item));
   }
   lines.push('Descansa 💪');
+  return lines.join('\n');
+}
+
+// Resumen de la semana que viene (próximos 7 días, desde mañana), agrupado por día.
+// Se envía a Jalil los domingos por la noche para planificar con Ale, y con "resumen semana".
+export async function weeklyBriefing() {
+  const from = madridDateParts(1);
+  const to = madridDateParts(7);
+  const events = await eventsForRange(from, to);
+  const lines = [`*🗓️ Resumen de la semana* (${fmtDate(from)} → ${fmtDate(to)})`];
+  if (events.length === 0) {
+    lines.push('\nSemana despejada, nada programado 👌');
+    return lines.join('\n');
+  }
+  lines.push(`Tienes *${events.length}* ${events.length === 1 ? 'cosa' : 'cosas'} en agenda:`);
+  let curKey = '';
+  for (const item of events) {
+    const dp = eventDateParts(item.ev);
+    const key = `${dp.y}-${dp.m}-${dp.d}`;
+    if (key !== curKey) {
+      curKey = key;
+      lines.push(`\n*${fmtDate(dp)}*`);
+    }
+    lines.push(eventLine(item));
+  }
   return lines.join('\n');
 }
 

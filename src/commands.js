@@ -9,7 +9,7 @@
 // Si ANTHROPIC_API_KEY está configurada, cualquier otro texto que empiece por
 // "agrega" se interpreta con IA en lenguaje natural.
 import { createEvent, deleteEvent, moveEvent, eventsForDateParts, eventsForRange, overlappingEvents, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
-import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda } from './briefing.js';
+import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda, weeklyBriefing } from './briefing.js';
 import { addReminder, nextOccurrence, describeRepeat, listReminders, removeReminder } from './reminders.js';
 import { getWeather } from './weather.js';
 import { getCity, setCity } from './settings.js';
@@ -546,6 +546,11 @@ export async function handleCommand(text, from) {
 
   if (t === 'agenda hoy') return { reply: await morningBriefing() };
   if (t === 'agenda mañana' || t === 'agenda manana') return { reply: await nightBriefing() };
+
+  // "resumen semana" / "resumen" / "semana que viene" → semana entera de un vistazo
+  if (/^(resumen|semana que viene)\b/i.test(t) || t === 'semana') {
+    return { reply: await weeklyBriefing() };
+  }
 
   // "agenda <cuándo>": día suelto o periodo (semana, mes, un mes concreto...)
   if (/^agenda\b/i.test(t)) {
