@@ -7,7 +7,8 @@ import {
   madridDateParts, madridToUtc, TZ, CALENDARS,
 } from './calendar.js';
 import { getCity } from './settings.js';
-import { addReminder } from './reminders.js';
+import { addReminder, listReminders, removeReminder } from './reminders.js';
+import { getWeather } from './weather.js';
 import { resolveAgendaDay, resolveAgendaRange } from './commands.js';
 
 const histories = new Map(); // chatId -> [{ role, content }]
@@ -122,6 +123,32 @@ const TOOLS = [
       required: ['cuando'],
     },
   },
+  {
+    name: 'ver_recordatorios',
+    description: 'Lista los recordatorios pendientes del usuario.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'cancelar_recordatorio',
+    description: 'Cancela un recordatorio pendiente que coincida con una palabra clave.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        keyword: { type: 'string', description: 'Palabra clave del recordatorio a cancelar (ej: "llamada", "correo").' },
+      },
+      required: ['keyword'],
+    },
+  },
+  {
+    name: 'consultar_clima',
+    description: 'Consulta el clima actual de la ciudad actual o de una ciudad concreta.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        city: { type: 'string', description: 'Ciudad (omitir para usar la ciudad actual).' },
+      },
+    },
+  },
 ];
 
 // --------- Ejecución de cada herramienta (código determinista) ---------
@@ -192,6 +219,28 @@ async function executeTool(name, input, ctx) {
       return `Eventos del ${dp.d}/${dp.m}:\n${fmtEventList(events)}`;
     }
 
+    if (name === 'ver_recordatorios') {
+      const rs = listReminders(ctx.chatId);
+      if (!rs.length) return 'No hay recordatorios pendientes.';
+      return 'Recordatorios pendientes:\n' + rs.map((r) =>
+        `- "${r.text}" → ${new Date(r.dueTs).toLocaleString('es-ES', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}`,
+      ).join('\n');
+    }
+
+    if (name === 'cancelar_recordatorio') {
+      const rs = listReminders(ctx.chatId).filter((r) => norm(r.text).includes(norm(input.keyword)));
+      if (!rs.length) return `No hay ningún recordatorio de "${input.keyword}".`;
+      if (rs.length > 1) return `Hay varios recordatorios de "${input.keyword}": ${rs.map((r) => r.text).join('; ')}. Pide al usuario que precise cuál.`;
+      removeReminder(rs[0].id);
+      return `OK. Recordatorio cancelado: "${rs[0].text}".`;
+    }
+
+    if (name === 'consultar_clima') {
+      const w = await getWeather(input.city || getCity());
+      if (!w) return 'No pude obtener el clima.';
+      return `${w.emoji} ${w.tempC}°C, ${w.desc} en ${w.city}.`;
+    }
+
     return 'Herramienta desconocida.';
   } catch (e) {
     return `Error al ejecutar: ${e?.errors?.[0]?.message || e.message}`;
@@ -216,7 +265,14 @@ export async function conversationalReply(chatId, text, who = 'Jalil') {
     return 'Puedo ayudarte con tu *agenda*, *apuntar* cosas, *recordatorios* y más. Escríbeme lo que necesites 🙌';
   }
 
-  const agenda = await upcomingSnapshot();
+  const [agenda, clima] = await Promise.all([
+    upcomingSnapshot(),
+    getWeather(getCity()).then((w) => (w ? `${w.emoji} ${w.tempC}°C, ${w.desc} en ${w.city}` : '')).catch(() => ''),
+  ]);
+  const recs = listReminders(chatId);
+  const recsTxt = recs.length
+    ? recs.map((r) => `- "${r.text}" → ${new Date(r.dueTs).toLocaleString('es-ES', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`).join('\n')
+    : 'Ninguno.';
   const ahora = new Date();
   const hoy = ahora.toLocaleDateString('es-ES', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const horaNum = Number(ahora.toLocaleString('en-US', { timeZone: TZ, hour: '2-digit', hour12: false }));
@@ -226,12 +282,13 @@ export async function conversationalReply(chatId, text, who = 'Jalil') {
     : 'Estás hablando con Jalil, el asistente de confianza de Ale que organiza su día contigo. Habláis de tú a tú, en corto.';
 
   const system =
-    'Eres el jefe de gabinete personal por WhatsApp de un empresario (Ale). Eres su mano derecha digital, y puedes ACTUAR (crear, mover y cancelar eventos, y poner recordatorios) usando tus herramientas.\n' +
+    'Eres el jefe de gabinete personal por WhatsApp de un empresario (Ale). Eres su mano derecha digital, y puedes ACTUAR (crear, mover y cancelar eventos, y poner/cancelar recordatorios) usando tus herramientas.\n' +
     `${quien}\n` +
-    `Es ${franja} de hoy, ${hoy}. La ciudad actual es ${getCity()}.\n\n` +
+    `Es ${franja} de hoy, ${hoy}. Ciudad actual: ${getCity()}.${clima ? ' Clima ahora: ' + clima + '.' : ''}\n\n` +
     'PERSONALIDAD: cercano pero profesional, directo, resolutivo y proactivo. Español natural, frases cortas y humanas, nunca sonando a robot. Algún emoji con moderación.\n\n' +
     'AGENDA de los próximos 8 días (Europe/Madrid):\n' +
     `${agenda}\n\n` +
+    `RECORDATORIOS PENDIENTES:\n${recsTxt}\n\n` +
     'CÓMO ACTÚAS:\n' +
     '- Cuando te pidan crear/mover/cancelar un evento o poner un recordatorio, HAZLO con la herramienta correspondiente (no te limites a decir cómo). Pasa el día en palabras (hoy, mañana, jueves, 25/07...) — el sistema calcula la fecha exacta.\n' +
     '- Si falta un dato imprescindible (p. ej. la hora, o qué evento exacto cuando hay varios), pregunta en una línea en vez de adivinar.\n' +

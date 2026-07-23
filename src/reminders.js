@@ -41,3 +41,21 @@ export function removeReminders(ids) {
 export function pendingCount(chatId) {
   return reminders.filter((r) => !chatId || r.chatId === chatId).length;
 }
+
+// Lista los recordatorios pendientes (de un chat), ordenados por hora
+export function listReminders(chatId) {
+  return reminders
+    .filter((r) => !chatId || r.chatId === chatId)
+    .sort((a, b) => a.dueTs - b.dueTs);
+}
+
+// Borra un recordatorio por id. Devuelve true si borró algo.
+export function removeReminder(id) {
+  const before = reminders.length;
+  reminders = reminders.filter((r) => r.id !== id);
+  if (reminders.length !== before) {
+    persist();
+    return true;
+  }
+  return false;
+}
