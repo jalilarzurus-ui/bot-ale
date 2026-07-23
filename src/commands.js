@@ -11,6 +11,8 @@
 import { createEvent, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
 import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda } from './briefing.js';
 import { addReminder } from './reminders.js';
+import { getWeather } from './weather.js';
+import { getCity, setCity } from './settings.js';
 
 const MONTHS_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 
@@ -254,6 +256,22 @@ export async function parseReminderAI(text) {
 
 export async function handleCommand(text, from) {
   const t = text.trim().toLowerCase();
+
+  // "ciudad ..." / "estamos en ...": fija la ciudad actual (para el clima del daily)
+  if (/^(ciudad|estamos en|estoy en)\b/i.test(t)) {
+    const city = text.trim().replace(/^(ciudad|estamos en|estoy en)\s*:?\s*/i, '').trim();
+    if (!city) return { reply: `📍 Ciudad actual: *${getCity()}*.\nPara cambiarla: "ciudad Dubái".` };
+    setCity(city);
+    return { reply: `📍 Anotado, ahora estáis en *${city}*. El clima del daily usará esta ciudad.` };
+  }
+
+  // "clima" / "tiempo": clima actual de la ciudad fijada (o de la que indiques)
+  if (/^(clima|tiempo|el tiempo)\b/i.test(t)) {
+    const arg = text.trim().replace(/^(clima|tiempo|el tiempo)\s*(en|de)?\s*:?\s*/i, '').trim();
+    const w = await getWeather(arg || getCity());
+    if (!w) return { reply: 'No pude obtener el clima 🤔. Prueba con otra ciudad.' };
+    return { reply: `${w.emoji} *${w.tempC}°C*, ${w.desc} en ${w.city}` };
+  }
 
   // "recuérdame ...": crear un recordatorio que avisa a la hora indicada
   if (/^(recu[eé]rdame|recu[eé]rda|recordar|recordatorio)\b/i.test(t)) {

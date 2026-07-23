@@ -1,5 +1,7 @@
 // Redacción de los mensajes de briefing (formato WhatsApp)
 import { eventsForDay, eventsForDateParts, eventsForRange, TZ } from './calendar.js';
+import { getWeather } from './weather.js';
+import { getCity } from './settings.js';
 
 const DAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
@@ -48,11 +50,20 @@ export async function morningBriefing() {
   return lines.join('\n');
 }
 
-// DAILY de la mañana = recordatorios fijos + agenda del día (lo que se envía a Ale a las 7:00)
+// DAILY de la mañana = clima + agenda del día + recordatorios fijos (se envía a Ale a las 7:00)
 export async function morningDaily() {
   const agenda = await morningBriefing();
   const recordatorios = ['📋 *Recordatorios del día:*', ...DAILY_REMINDERS.map((r) => `• ${r}`)].join('\n');
-  return `${agenda}\n\n${recordatorios}`;
+
+  let clima = '';
+  try {
+    const w = await getWeather(getCity());
+    if (w) clima = `${w.emoji} ${w.tempC}°C, ${w.desc} en ${w.city}\n\n`;
+  } catch {
+    // si el clima falla, el daily sale igual sin él
+  }
+
+  return `${clima}${agenda}\n\n${recordatorios}`;
 }
 
 export async function nightBriefing() {
