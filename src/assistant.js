@@ -129,6 +129,17 @@ const TOOLS = [
     },
   },
   {
+    name: 'buscar_evento',
+    description: 'Busca un evento por palabra clave en los próximos ~3 meses, SIN saber el día. Úsalo para preguntas tipo "¿cuándo es el vuelo?", "¿cuándo tengo la reunión con Juan?".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        keyword: { type: 'string', description: 'Palabra(s) clave del evento a buscar (ej: "vuelo", "reunión Juan").' },
+      },
+      required: ['keyword'],
+    },
+  },
+  {
     name: 'ver_recordatorios',
     description: 'Lista los recordatorios pendientes del usuario.',
     input_schema: { type: 'object', properties: {} },
@@ -264,6 +275,15 @@ async function executeTool(name, input, ctx) {
       if (!dp) return 'No entendí la fecha.';
       const { events } = await eventsForDateParts(dp.y, dp.m, dp.d);
       return `Eventos del ${dp.d}/${dp.m}:\n${fmtEventList(events)}`;
+    }
+
+    if (name === 'buscar_evento') {
+      const k = norm(input.keyword || '');
+      if (!k) return 'Falta la palabra clave de búsqueda.';
+      const events = await eventsForRange(madridDateParts(0), madridDateParts(92));
+      const hits = events.filter((it) => norm(it.ev.summary).includes(k));
+      if (!hits.length) return `No encontré ningún evento con "${input.keyword}" en los próximos ~3 meses.`;
+      return `Encontrados (${hits.length}):\n${fmtEventList(hits.slice(0, 12))}`;
     }
 
     if (name === 'ver_recordatorios') {

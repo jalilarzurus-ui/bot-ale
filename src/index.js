@@ -111,6 +111,12 @@ app.post('/webhook', async (req, res) => {
     // abrir ventana de 24h: entregar mensajes retenidos
     await flushQueue(from);
 
+    // Eco de voz: si vino por audio, confirmamos qué entendimos (para cazar errores de
+    // transcripción antes de actuar). Los audios los manda sobre todo Ale.
+    if (msg.type === 'audio') {
+      await sendText(from, `🎤 Entendí: "${text}"`);
+    }
+
     // ¿Hay una acción peligrosa a medias (cancelar/mover evento) esperando "sí"?
     const pend = getPending(from);
     if (pend) {

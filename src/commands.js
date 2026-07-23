@@ -8,7 +8,7 @@
 //
 // Si ANTHROPIC_API_KEY está configurada, cualquier otro texto que empiece por
 // "agrega" se interpreta con IA en lenguaje natural.
-import { createEvent, deleteEvent, moveEvent, eventsForDateParts, overlappingEvents, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
+import { createEvent, deleteEvent, moveEvent, eventsForDateParts, eventsForRange, overlappingEvents, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
 import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda } from './briefing.js';
 import { addReminder, nextOccurrence, describeRepeat, listReminders, removeReminder } from './reminders.js';
 import { getWeather } from './weather.js';
@@ -262,6 +262,24 @@ function fmtEventLine(it) {
   return `${it.ev.summary} (${hora})`;
 }
 
+// Línea de evento con fecha completa (para búsquedas: no sabes el día)
+function fmtEventFull(it) {
+  const dt = it.ev.start?.dateTime;
+  const cuando = dt
+    ? new Date(dt).toLocaleString('es-ES', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+    : new Date(`${it.ev.start?.date}T00:00:00`).toLocaleDateString('es-ES', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long' }) + ' (todo el día)';
+  const cal = CALENDARS[it.calKey];
+  return `${cal?.emoji ? cal.emoji + ' ' : ''}*${it.ev.summary}* — ${cuando}${cal ? ` (${cal.label})` : ''}`;
+}
+
+// Busca eventos por palabra clave en una ventana de días (por defecto ~3 meses)
+export async function searchEvents(keyword, days = 92) {
+  const k = norm(keyword).trim();
+  if (!k) return [];
+  const events = await eventsForRange(madridDateParts(0), madridDateParts(days));
+  return events.filter((it) => norm(it.ev.summary).includes(k));
+}
+
 // La IA extrae la intención de gestionar un evento (cancelar o mover).
 export async function parseManageAI(text) {
   const r = await anthropic({
@@ -333,6 +351,33 @@ export async function handleCommand(text, from) {
         return `${i + 1}. *${r.text}* → ${cuando}${r.repeat ? ' 🔁 (' + describeRepeat(r.repeat) + ')' : ''}`;
       });
       return { reply: `📋 Tus recordatorios (${rs.length}):\n${lines.join('\n')}\n\nPara borrar uno: "cancela recordatorio 2".` };
+    }
+  }
+
+  // BUSCAR eventos por palabra clave ("¿cuándo es el vuelo?", "busca la reunión con Juan").
+  // No calcula fecha: escanea los próximos ~3 meses. Va antes que crear/gestionar.
+  {
+    const clean = text.trim().replace(/^[¿¡\s]+/, '');
+    const mBusca = clean.match(/^(?:b[uú]sca(?:me)?|encuentra|encu[eé]ntrame)\s+(.+)/i);
+    const mCuando = clean.match(/^cu[aá]ndo\s+(?:es|era|ser[aá]|tengo|ten[ií]a|hay|me toca|toca)?\s*(.+?)[?!.]*$/i);
+    const kwRaw = (mBusca && mBusca[1]) || (mCuando && mCuando[1]);
+    if (kwRaw) {
+      const keyword = kwRaw.trim()
+        .replace(/[?¿!.]+$/, '')
+        .replace(/^(el|la|los|las|mi|mis|un|una|de|del)\s+/i, '')
+        .trim();
+      if (keyword.length >= 3 && !/^recordatori/i.test(keyword)) {
+        const hits = await searchEvents(keyword);
+        if (hits.length) {
+          const lines = hits.slice(0, 12).map((it) => '• ' + fmtEventFull(it));
+          const extra = hits.length > 12 ? `\n… y ${hits.length - 12} más.` : '';
+          const cab = hits.length === 1 ? '🔍 Encontré esto:' : `🔍 Encontré ${hits.length} coincidencias:`;
+          return { reply: `${cab}\n${lines.join('\n')}${extra}` };
+        }
+        // Sin resultados: si fue búsqueda EXPLÍCITA ("busca..."), lo decimos;
+        // si fue una pregunta "cuándo...", dejamos que responda la IA (no secuestramos la charla).
+        if (mBusca) return { reply: `🔍 No encontré ningún evento con "*${keyword}*" en los próximos ~3 meses.` };
+      }
     }
   }
 
