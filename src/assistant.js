@@ -3,7 +3,7 @@
 // mediante herramientas. Reutiliza la lógica determinista ya existente (las fechas
 // las calcula el código, nunca la IA).
 import {
-  eventsForRange, eventsForDateParts, createEvent, deleteEvent, moveEvent,
+  eventsForRange, eventsForDateParts, createEvent, deleteEvent, moveEvent, overlappingEvents,
   madridDateParts, madridToUtc, TZ, CALENDARS,
 } from './calendar.js';
 import { getCity } from './settings.js';
@@ -163,13 +163,19 @@ async function executeTool(name, input, ctx) {
       const dp = resolveAgendaDay(input.dayText || 'hoy');
       if (!dp) return 'No entendí el día. Pide una aclaración.';
       const allDay = input.allDay || input.hh === undefined || input.hh === null;
+      const durMin = input.durMin || 60;
+      // Mirar choques antes de crear (solo si tiene hora).
+      const clashes = allDay ? [] : await overlappingEvents(dp.y, dp.m, dp.d, input.hh, input.mm ?? 0, durMin).catch(() => []);
       await createEvent({
         calKey: validCal(input.calKey), summary: input.summary,
         y: dp.y, m: dp.m, d: dp.d, hh: input.hh, mm: input.mm ?? 0,
-        durMin: input.durMin || 60, allDay,
+        durMin, allDay,
       });
       const cuando = allDay ? `${dp.d}/${dp.m} (todo el día)` : `${dp.d}/${dp.m} a las ${String(input.hh).padStart(2, '0')}:${String(input.mm ?? 0).padStart(2, '0')}`;
-      return `OK. Evento creado: "${input.summary}" el ${cuando} en ${CALENDARS[validCal(input.calKey)].label}.`;
+      const aviso = clashes.length
+        ? ` AVISA al usuario de que se solapa con: ${clashes.map((c) => `${c.summary} (${c.hora})`).join(', ')}.`
+        : '';
+      return `OK. Evento creado: "${input.summary}" el ${cuando} en ${CALENDARS[validCal(input.calKey)].label}.${aviso}`;
     }
 
     if (name === 'cancelar_evento' || name === 'mover_evento') {
@@ -200,6 +206,7 @@ async function executeTool(name, input, ctx) {
         durMin = Math.max(15, Math.round((new Date(it.ev.end.dateTime) - new Date(it.ev.start.dateTime)) / 60000));
       }
       const nuevaHora = `${String(input.newHh).padStart(2, '0')}:${String(input.newMm ?? 0).padStart(2, '0')}`;
+      const clashes = await overlappingEvents(target.y, target.m, target.d, input.newHh, input.newMm ?? 0, durMin, it.ev.id).catch(() => []);
       setPending(ctx.chatId, {
         describe: `mover "${it.ev.summary}"`,
         exec: async () => {
@@ -208,7 +215,8 @@ async function executeTool(name, input, ctx) {
           return `📅 Movido: "${it.ev.summary}" a ${target.d}/${target.m} ${nuevaHora}.`;
         },
       });
-      return `CONFIRMACIÓN NECESARIA: no está movido todavía. Pide al usuario que confirme mover "${it.ev.summary}" a ${target.d}/${target.m} a las ${nuevaHora} respondiendo "sí".`;
+      const choque = clashes.length ? ` AVISA de que a esa hora ya hay: ${clashes.map((c) => `${c.summary} (${c.hora})`).join(', ')}.` : '';
+      return `CONFIRMACIÓN NECESARIA: no está movido todavía. Pide al usuario que confirme mover "${it.ev.summary}" a ${target.d}/${target.m} a las ${nuevaHora} respondiendo "sí".${choque}`;
     }
 
     if (name === 'poner_recordatorio') {

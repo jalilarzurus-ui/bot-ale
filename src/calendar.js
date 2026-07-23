@@ -148,6 +148,30 @@ export async function moveEvent(calKey, eventId, y, m, d, hh, mm, durMin = 60) {
   return res.data;
 }
 
+// Devuelve los eventos CON HORA que se solapan con la franja [inicio, inicio+durMin)
+// en la fecha dada. Ignora los de todo el día y, opcionalmente, un evento por id
+// (útil al MOVER: no queremos que un evento choque consigo mismo).
+export async function overlappingEvents(y, m, d, hh, mm, durMin = 60, ignoreId = null) {
+  if (hh === undefined || hh === null) return []; // evento de todo el día: sin solape de hora
+  const S = madridToUtc(y, m, d, hh, mm).getTime();
+  const E = S + durMin * 60000;
+  const { events } = await eventsForDateParts(y, m, d);
+  const out = [];
+  for (const it of events) {
+    if (ignoreId && it.ev.id === ignoreId) continue;
+    const sdt = it.ev.start?.dateTime;
+    const edt = it.ev.end?.dateTime;
+    if (!sdt || !edt) continue; // evento de todo el día existente: no bloquea una franja
+    const s = new Date(sdt).getTime();
+    const e = new Date(edt).getTime();
+    if (s < E && S < e) {
+      const hora = new Date(sdt).toLocaleTimeString('es-ES', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+      out.push({ summary: it.ev.summary, hora, calKey: it.calKey });
+    }
+  }
+  return out;
+}
+
 function startMs(ev) {
   return new Date(ev.start?.dateTime || `${ev.start?.date}T00:00:00`).getTime();
 }

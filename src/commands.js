@@ -8,7 +8,7 @@
 //
 // Si ANTHROPIC_API_KEY está configurada, cualquier otro texto que empiece por
 // "agrega" se interpreta con IA en lenguaje natural.
-import { createEvent, deleteEvent, moveEvent, eventsForDateParts, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
+import { createEvent, deleteEvent, moveEvent, eventsForDateParts, overlappingEvents, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
 import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda } from './briefing.js';
 import { addReminder, nextOccurrence, describeRepeat, listReminders, removeReminder } from './reminders.js';
 import { getWeather } from './weather.js';
@@ -368,6 +368,8 @@ export async function handleCommand(text, from) {
         durMin = Math.max(15, Math.round((new Date(it.ev.end.dateTime) - new Date(it.ev.start.dateTime)) / 60000));
       }
       const nuevaHora = `${String(p.newHh).padStart(2, '0')}:${String(p.newMm ?? 0).padStart(2, '0')}`;
+      // ¿La nueva hora choca con otra cosa? (ignorando el propio evento que movemos)
+      const clashes = await overlappingEvents(target.y, target.m, target.d, p.newHh, p.newMm ?? 0, durMin, it.ev.id).catch(() => []);
       // No movemos de golpe: pedimos confirmación.
       setPending(from, {
         describe: `mover "${it.ev.summary}"`,
@@ -380,8 +382,11 @@ export async function handleCommand(text, from) {
           return `📅 Movido: *${it.ev.summary}* → ${target.d}/${target.m} ${nuevaHora} (${CALENDARS[it.calKey].label})`;
         },
       });
+      const aviso = clashes.length
+        ? `\n⚠️ Ojo: a esa hora ya tienes *${clashes.map((c) => `${c.summary} (${c.hora})`).join(', ')}*.`
+        : '';
       return {
-        reply: `¿Muevo *${it.ev.summary}* a *${target.d}/${target.m} a las ${nuevaHora}*? (${CALENDARS[it.calKey].label})\nResponde *sí* para confirmar o *no* para dejarlo.`,
+        reply: `¿Muevo *${it.ev.summary}* a *${target.d}/${target.m} a las ${nuevaHora}*? (${CALENDARS[it.calKey].label})${aviso}\nResponde *sí* para confirmar o *no* para dejarlo.`,
       };
     }
     // Cancelar: pedimos confirmación antes de borrar.
@@ -538,6 +543,11 @@ export async function handleCommand(text, from) {
           'No entendí el evento 🤔. Prueba en natural ("anota comida con el inversor el jueves 9pm personal") o con formato ("agrega: Cena | jueves 21:00 | personal").',
       };
     }
+    // Antes de crear, miramos si choca con algo ya agendado (solo si tiene hora).
+    let clashes = [];
+    if (!parsed.allDay) {
+      clashes = await overlappingEvents(parsed.y, parsed.m, parsed.d, parsed.hh, parsed.mm, parsed.durMin).catch(() => []);
+    }
     try {
       await createEvent(parsed);
     } catch (e) {
@@ -546,9 +556,11 @@ export async function handleCommand(text, from) {
       };
     }
     const cal = CALENDARS[parsed.calKey || 'actividades'];
-    return {
-      reply: `✅ Agregado a ${cal.label}: *${parsed.summary}* — ${parsed.allDay ? 'todo el día' : `${parsed.d}/${parsed.m} ${String(parsed.hh).padStart(2, '0')}:${String(parsed.mm).padStart(2, '0')}`}`,
-    };
+    let reply = `✅ Agregado a ${cal.label}: *${parsed.summary}* — ${parsed.allDay ? 'todo el día' : `${parsed.d}/${parsed.m} ${String(parsed.hh).padStart(2, '0')}:${String(parsed.mm).padStart(2, '0')}`}`;
+    if (clashes.length) {
+      reply += `\n\n⚠️ *Ojo, se pisa con:* ${clashes.map((c) => `${c.summary} (${c.hora})`).join(', ')}. Si quieres lo movemos.`;
+    }
+    return { reply };
   }
 
   return null; // no es un comando conocido
