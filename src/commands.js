@@ -8,7 +8,7 @@
 //
 // Si ANTHROPIC_API_KEY está configurada, cualquier otro texto que empiece por
 // "agrega" se interpreta con IA en lenguaje natural.
-import { createEvent, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
+import { createEvent, deleteEvent, moveEvent, eventsForDateParts, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
 import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda } from './briefing.js';
 import { addReminder } from './reminders.js';
 import { getWeather } from './weather.js';
@@ -254,8 +254,100 @@ export async function parseReminderAI(text) {
   }
 }
 
+// Normaliza texto (minúsculas, sin acentos) para comparar títulos de eventos
+function norm(s) {
+  return (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+function fmtEventLine(it) {
+  const dt = it.ev.start?.dateTime;
+  const hora = dt
+    ? new Date(dt).toLocaleTimeString('es-ES', { timeZone: TZ, hour: '2-digit', minute: '2-digit' })
+    : 'todo el día';
+  return `${it.ev.summary} (${hora})`;
+}
+
+// La IA extrae la intención de gestionar un evento (cancelar o mover).
+export async function parseManageAI(text) {
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5',
+      max_tokens: 200,
+      system:
+        'El usuario quiere CANCELAR o MOVER un evento de su calendario. Responde SOLO con JSON:\n' +
+        '{"action":"cancel","keyword":"...","dayText":"...","newDayText":null,"newHh":null,"newMm":null}\n' +
+        '- action: "cancel" si dice cancelar/borrar/eliminar/quitar/anular; "move" si dice mover/cambiar/reprogramar.\n' +
+        '- keyword: palabra(s) clave para encontrar el evento (ej: "comida", "reunión con Juan").\n' +
+        '- dayText: el día ACTUAL del evento (hoy/mañana/pasado mañana/lunes..domingo/25-07/4 de agosto), SIN calcular fecha. Si no se dice, "hoy".\n' +
+        '- Solo para "move": newDayText (nuevo día si cambia, o null si es el mismo día) y newHh/newMm (nueva hora en 24h). Para "cancel", deja esos tres en null.',
+      messages: [{ role: 'user', content: text }],
+    }),
+  });
+  const data = await res.json();
+  try {
+    const txt = data.content?.[0]?.text || '';
+    return JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1));
+  } catch {
+    return null;
+  }
+}
+
 export async function handleCommand(text, from) {
   const t = text.trim().toLowerCase();
+
+  // "cancela/mueve ..." : gestionar un evento existente (cancelar o mover)
+  if (/^(cancela|borra|elimina|quita|anula|mueve|reprograma|cambia)\b/i.test(t)) {
+    const p = await parseManageAI(text);
+    if (!p || !p.keyword) {
+      return {
+        reply: 'Dime qué evento y de qué día 🗓️. Ej: "cancela la comida del jueves" o "mueve la reunión del viernes a las 5".',
+      };
+    }
+    const dp = resolveAgendaDay(p.dayText || 'hoy');
+    if (!dp) return { reply: 'No entendí el día del evento 🤔.' };
+    const { events } = await eventsForDateParts(dp.y, dp.m, dp.d);
+    const k = norm(p.keyword);
+    const matches = events.filter((it) => norm(it.ev.summary).includes(k));
+    if (matches.length === 0) {
+      return { reply: `No encontré ningún evento de "${p.keyword}" el ${dp.d}/${dp.m} 🤔.` };
+    }
+    if (matches.length > 1) {
+      return {
+        reply: `Encontré varios el ${dp.d}/${dp.m}:\n${matches.map((it) => '• ' + fmtEventLine(it)).join('\n')}\nSé más específico (nombre u hora) para elegir cuál.`,
+      };
+    }
+    const it = matches[0];
+    if (p.action === 'move') {
+      const target = p.newDayText ? resolveAgendaDay(p.newDayText) : dp;
+      if (!target) return { reply: 'No entendí el nuevo día 🤔.' };
+      if (p.newHh === undefined || p.newHh === null) return { reply: '¿A qué hora lo muevo? Ej: "a las 5".' };
+      let durMin = 60;
+      if (it.ev.start?.dateTime && it.ev.end?.dateTime) {
+        durMin = Math.max(15, Math.round((new Date(it.ev.end.dateTime) - new Date(it.ev.start.dateTime)) / 60000));
+      }
+      try {
+        await moveEvent(it.calKey, it.ev.id, target.y, target.m, target.d, p.newHh, p.newMm ?? 0, durMin);
+      } catch (e) {
+        return { reply: `⚠️ No pude moverlo: ${e?.errors?.[0]?.message || e.message}` };
+      }
+      return {
+        reply: `📅 Movido: *${it.ev.summary}* → ${target.d}/${target.m} ${String(p.newHh).padStart(2, '0')}:${String(p.newMm ?? 0).padStart(2, '0')} (${CALENDARS[it.calKey].label})`,
+      };
+    }
+    try {
+      await deleteEvent(it.calKey, it.ev.id);
+    } catch (e) {
+      return { reply: `⚠️ No pude cancelarlo: ${e?.errors?.[0]?.message || e.message}` };
+    }
+    return { reply: `🗑️ Cancelado: *${it.ev.summary}* — ${dp.d}/${dp.m} (${CALENDARS[it.calKey].label})` };
+  }
 
   // "ciudad ..." / "estamos en ...": fija la ciudad actual (para el clima del daily)
   if (/^(ciudad|estamos en|estoy en)\b/i.test(t)) {

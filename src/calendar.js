@@ -124,6 +124,30 @@ export async function createEvent({ calKey, summary, y, m, d, hh, mm, durMin = 6
   return res.data;
 }
 
+// Borra un evento por su id
+export async function deleteEvent(calKey, eventId) {
+  const cal = getClient();
+  const c = CALENDARS[calKey] || CALENDARS.actividades;
+  await cal.events.delete({ calendarId: c.id, eventId });
+}
+
+// Cambia la fecha/hora de un evento existente (mover/reprogramar)
+export async function moveEvent(calKey, eventId, y, m, d, hh, mm, durMin = 60) {
+  const cal = getClient();
+  const c = CALENDARS[calKey] || CALENDARS.actividades;
+  const start = madridToUtc(y, m, d, hh, mm);
+  const end = new Date(start.getTime() + durMin * 60000);
+  const res = await cal.events.patch({
+    calendarId: c.id,
+    eventId,
+    resource: {
+      start: { dateTime: start.toISOString(), timeZone: TZ },
+      end: { dateTime: end.toISOString(), timeZone: TZ },
+    },
+  });
+  return res.data;
+}
+
 function startMs(ev) {
   return new Date(ev.start?.dateTime || `${ev.start?.date}T00:00:00`).getTime();
 }
