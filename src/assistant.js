@@ -34,27 +34,34 @@ async function upcomingSnapshot() {
   }
 }
 
-export async function conversationalReply(chatId, text) {
+export async function conversationalReply(chatId, text, who = 'Jalil') {
   if (!process.env.ANTHROPIC_API_KEY) {
     return 'Puedo ayudarte con tu *agenda*, *apuntar* cosas, *recordatorios* y más. Escríbeme lo que necesites 🙌';
   }
 
   const agenda = await upcomingSnapshot();
-  const hoy = new Date().toLocaleDateString('es-ES', {
+  const ahora = new Date();
+  const hoy = ahora.toLocaleDateString('es-ES', {
     timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   });
+  const horaNum = Number(ahora.toLocaleString('en-US', { timeZone: TZ, hour: '2-digit', hour12: false }));
+  const franja = horaNum < 6 ? 'la madrugada' : horaNum < 13 ? 'la mañana' : horaNum < 20 ? 'la tarde' : 'la noche';
+  const quien = who === 'Ale'
+    ? 'Estás hablando con Ale (el jefe). Trátale con cercanía y eficiencia, resolutivo.'
+    : 'Estás hablando con Jalil, el asistente de confianza de Ale que organiza su día contigo. Habláis de tú a tú, en corto.';
 
   const system =
-    'Eres el asistente personal por WhatsApp de un empresario (Ale) y su asistente (Jalil). ' +
-    'Conversa de forma natural, cercana y útil, en español y conciso (es WhatsApp).\n' +
-    `Hoy es ${hoy}. Ciudad actual: ${getCity()}.\n` +
-    'Estos son sus PRÓXIMOS eventos (zona Europe/Madrid):\n' +
+    'Eres el jefe de gabinete personal por WhatsApp de un empresario (Ale). Eres su mano derecha digital.\n' +
+    `${quien}\n` +
+    `Es ${franja} de hoy, ${hoy}. La ciudad actual es ${getCity()}.\n\n` +
+    'PERSONALIDAD: cercano pero profesional, directo, resolutivo y proactivo. Hablas natural en español, con frases cortas y humanas — nunca sonando a robot ni a "IA". Algún emoji con moderación. Vas al grano con calidez.\n\n' +
+    'AGENDA de los próximos 8 días (zona Europe/Madrid):\n' +
     `${agenda}\n\n` +
-    'Reglas:\n' +
-    '- Si te preguntan si algo quedó agendado, cuándo es algo, o qué tienen un día, MIRA la lista de eventos de arriba y responde con seguridad y de forma concreta.\n' +
-    '- No inventes eventos que no estén en la lista.\n' +
-    '- Las acciones (crear, cancelar o mover eventos; poner recordatorios; ver el clima) el usuario las hace con frases directas ("anota...", "cancela...", "mueve...", "recuérdame...", "clima"). Si te piden una acción, dilo brevemente (ej: «dímelo así: "anota cena el sábado 21h" y lo agendo»).\n' +
-    '- Responde SOLO lo que te pregunten, sin relleno.';
+    'CÓMO ACTÚAS:\n' +
+    '- Preguntas sobre la agenda: mira la lista de arriba y responde con seguridad y concreto. NUNCA inventes eventos que no estén en la lista.\n' +
+    '- Sé proactivo: si detectas un choque de horarios, un hueco útil o algo relevante para su día, coméntalo en una línea.\n' +
+    '- Acciones (crear/cancelar/mover eventos, recordatorios, clima) se hacen con frases directas: "anota...", "cancela...", "mueve...", "recuérdame...", "clima". Si te piden una acción, guíales con naturalidad (ej: «dímelo así: "anota cena el sábado 21h" y lo dejo agendado»).\n' +
+    '- Responde solo a lo que te dicen, sin relleno ni repetir lo obvio.';
 
   const history = histories.get(chatId) || [];
   const messages = [...history, { role: 'user', content: text }];

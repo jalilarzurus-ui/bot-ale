@@ -106,7 +106,7 @@ app.post('/webhook', async (req, res) => {
         return;
       }
       // No es un comando: responde la IA de forma natural (conversación + agenda).
-      await sendText(JALIL, await conversationalReply(from, text));
+      await sendText(JALIL, await conversationalReply(from, text, 'Jalil'));
     } else if (from === ALE) {
       // Ale tiene acceso completo (agenda, crear eventos, asistente IA). Jalil se entera de todo.
       // (No puede aprobar briefings: 'ok'/'no' solo se manejan en la rama de Jalil.)
@@ -117,7 +117,7 @@ app.post('/webhook', async (req, res) => {
         return;
       }
       // No es un comando: la IA le responde de forma natural, y avisamos a Jalil.
-      await sendText(ALE, await conversationalReply(from, text));
+      await sendText(ALE, await conversationalReply(from, text, 'Ale'));
       await sendText(JALIL, `💬 Ale le escribió al bot: "${text}"`);
     }
   } catch (e) {
