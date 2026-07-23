@@ -14,7 +14,7 @@ import { addReminder, nextOccurrence, describeRepeat, listReminders, removeRemin
 import { getWeather } from './weather.js';
 import { getCity, setCity } from './settings.js';
 import { setPending } from './confirm.js';
-import { anthropic, jsonOf, textOf, AI_DOWN } from './ai.js';
+import { anthropic, jsonOf, textOf, AI_DOWN, MODEL_FAST, MODEL_SMART } from './ai.js';
 
 // Mensaje cuando la IA está caída/saturada (para no parecer "tonto" ni quedarse mudo).
 const SATURADO = '⚠️ Mi cerebro (IA) está saturado un segundo. Reinténtalo en unos instantes, por favor 🙏';
@@ -193,7 +193,7 @@ function build(y, m, d, hh, mm) {
 // código la convierte en fecha exacta de forma determinista (resolveAgendaDay).
 export async function parseWithAI(text) {
   const r = await anthropic({
-    model: 'claude-haiku-4-5',
+    model: MODEL_FAST,
     max_tokens: 300,
     system:
       'Extrae un evento de calendario del mensaje (en español). Responde SOLO con JSON, sin texto extra:\n' +
@@ -213,7 +213,7 @@ export async function parseWithAI(text) {
 // Asistente de IA de propósito general (redactar, resumir, traducir, responder).
 export async function askAI(prompt) {
   const r = await anthropic({
-    model: 'claude-haiku-4-5',
+    model: MODEL_SMART,
     max_tokens: 1024,
     system:
       'Eres el asistente personal de Jalil, que gestiona la agenda y las tareas de su jefe (Ale). ' +
@@ -230,7 +230,7 @@ export async function askAI(prompt) {
 // La IA extrae el recordatorio (qué + cuándo). El código calcula la hora exacta.
 export async function parseReminderAI(text) {
   const r = await anthropic({
-    model: 'claude-haiku-4-5',
+    model: MODEL_FAST,
     max_tokens: 220,
     system:
       'Extrae un recordatorio del mensaje (en español). Responde SOLO con JSON, sin texto extra:\n' +
@@ -265,7 +265,7 @@ function fmtEventLine(it) {
 // La IA extrae la intención de gestionar un evento (cancelar o mover).
 export async function parseManageAI(text) {
   const r = await anthropic({
-    model: 'claude-haiku-4-5',
+    model: MODEL_FAST,
     max_tokens: 200,
     system:
       'El usuario quiere CANCELAR o MOVER un evento de su calendario. Responde SOLO con JSON:\n' +

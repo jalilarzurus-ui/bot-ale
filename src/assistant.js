@@ -11,7 +11,7 @@ import { addReminder, listReminders, removeReminder, nextOccurrence, describeRep
 import { getWeather } from './weather.js';
 import { resolveAgendaDay, resolveAgendaRange } from './commands.js';
 import { setPending } from './confirm.js';
-import { anthropic } from './ai.js';
+import { anthropic, MODEL_SMART } from './ai.js';
 
 const histories = new Map(); // chatId -> [{ role, content }]
 const MAX_TURNS = 10;
@@ -287,8 +287,9 @@ async function executeTool(name, input, ctx) {
 }
 
 async function callClaude(system, messages) {
+  // Cerebro "listo" (Sonnet) para conversar y ejecutar con criterio.
   // Reintenta ante picos transitorios de la IA (429/529/5xx/red).
-  return anthropic({ model: 'claude-haiku-4-5', max_tokens: 1024, system, tools: TOOLS, messages });
+  return anthropic({ model: MODEL_SMART, max_tokens: 1024, system, tools: TOOLS, messages });
 }
 
 export async function conversationalReply(chatId, text, who = 'Jalil') {

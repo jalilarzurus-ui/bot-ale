@@ -4,6 +4,11 @@
 const URL = 'https://api.anthropic.com/v1/messages';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Estrategia híbrida: Haiku (rápido) para extraer datos de una frase;
+// Sonnet (más juicio) para conversar/razonar y para redactar con calidad.
+export const MODEL_FAST = 'claude-haiku-4-5';
+export const MODEL_SMART = 'claude-sonnet-5';
+
 // Señal de "el cerebro (IA) no está disponible ahora mismo" — distinta de "no lo entendí".
 export const AI_DOWN = Symbol('AI_DOWN');
 
