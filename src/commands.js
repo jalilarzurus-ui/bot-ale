@@ -194,8 +194,47 @@ export async function parseWithAI(text) {
   }
 }
 
+// Asistente de IA de propósito general (redactar, resumir, traducir, responder).
+export async function askAI(prompt) {
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5',
+      max_tokens: 1024,
+      system:
+        'Eres el asistente personal de Jalil, que gestiona la agenda y las tareas de su jefe (Ale). ' +
+        'Ayuda con lo que te pida: redactar mensajes o correos (da el texto final, listo para copiar), ' +
+        'resumir textos largos, traducir (español, inglés, árabe) y responder preguntas. ' +
+        'Sé claro, útil y conciso: es por WhatsApp. Responde en el idioma de la petición. ' +
+        'Da directamente el resultado, sin explicar tu razonamiento ni añadir preámbulos.',
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  const data = await res.json();
+  return data.content?.[0]?.text?.trim() || null;
+}
+
 export async function handleCommand(text) {
   const t = text.trim().toLowerCase();
+
+  // "ia ...": asistente de IA (redactar, resumir, traducir, preguntar)
+  if (/^(ia|pregunta|claude)\b/i.test(t)) {
+    const prompt = text.trim().replace(/^(ia|pregunta|claude)\s*:?\s*/i, '');
+    if (!prompt) {
+      return {
+        reply:
+          'Dime qué necesitas después de *ia*. Ejemplos:\n• *ia redáctame un correo al socio moviendo la reunión al viernes*\n• *ia resume esto: [pega el texto]*\n• *ia traduce al inglés: buenos días, ¿nos vemos a las 5?*',
+      };
+    }
+    const ans = await askAI(prompt);
+    return { reply: ans || '⚠️ No pude generar la respuesta ahora mismo. Reinténtalo en un momento.' };
+  }
 
   if (t === 'agenda hoy') return { reply: await morningBriefing() };
   if (t === 'agenda mañana' || t === 'agenda manana') return { reply: await nightBriefing() };
