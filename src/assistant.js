@@ -7,7 +7,7 @@ import {
   madridDateParts, madridToUtc, TZ, CALENDARS,
 } from './calendar.js';
 import { getCity } from './settings.js';
-import { addReminder, listReminders, removeReminder } from './reminders.js';
+import { addReminder, listReminders, removeReminder, nextOccurrence, describeRepeat } from './reminders.js';
 import { getWeather } from './weather.js';
 import { resolveAgendaDay, resolveAgendaRange } from './commands.js';
 
@@ -99,15 +99,18 @@ const TOOLS = [
   },
   {
     name: 'poner_recordatorio',
-    description: 'Pone un recordatorio que avisará a la persona a la hora indicada.',
+    description: 'Pone un recordatorio que avisará a la persona a la hora indicada. Puede ser una sola vez o recurrente (cada día, cada X día de la semana, o cada X día del mes).',
     input_schema: {
       type: 'object',
       properties: {
         what: { type: 'string', description: 'Qué recordar.' },
-        dayText: { type: 'string', description: 'Día en palabras (omitir si usas inMinutes).' },
+        dayText: { type: 'string', description: 'Día en palabras (omitir si usas inMinutes o repeat).' },
         hh: { type: 'integer', description: 'Hora en 24h (por defecto 9 si no se dice).' },
         mm: { type: 'integer' },
-        inMinutes: { type: 'integer', description: 'Minutos desde ahora, para "en X minutos/horas".' },
+        inMinutes: { type: 'integer', description: 'Minutos desde ahora, para "en X minutos/horas" (solo una vez).' },
+        repeat: { type: 'string', enum: ['diario', 'semanal', 'mensual'], description: 'Solo si es recurrente: "diario"=cada día; "semanal"=cada X día de la semana (usa dow); "mensual"=cada X día del mes (usa dom).' },
+        dow: { type: 'integer', description: 'Solo para repeat="semanal": día de la semana (0=domingo,1=lunes,2=martes,3=miércoles,4=jueves,5=viernes,6=sábado).' },
+        dom: { type: 'integer', description: 'Solo para repeat="mensual": día del mes (1-31).' },
       },
       required: ['what'],
     },
@@ -192,6 +195,25 @@ async function executeTool(name, input, ctx) {
     }
 
     if (name === 'poner_recordatorio') {
+      // Recurrente: se reprograma solo tras cada aviso.
+      const mapRepeat = { diario: 'daily', semanal: 'weekly', mensual: 'monthly' };
+      if (input.repeat && mapRepeat[input.repeat]) {
+        const repeat = {
+          type: mapRepeat[input.repeat],
+          hh: input.hh ?? 9,
+          mm: input.mm ?? 0,
+          ...(input.repeat === 'semanal' ? { dow: Number(input.dow) } : {}),
+          ...(input.repeat === 'mensual' ? { dom: Number(input.dom) } : {}),
+        };
+        if (repeat.type === 'weekly' && !(repeat.dow >= 0 && repeat.dow <= 6)) return 'Falta qué día de la semana. Pregunta al usuario.';
+        if (repeat.type === 'monthly' && !(repeat.dom >= 1 && repeat.dom <= 31)) return 'Falta qué día del mes. Pregunta al usuario.';
+        const due = nextOccurrence(repeat, Date.now());
+        if (!due) return 'No pude calcular la repetición. Pide una aclaración.';
+        addReminder({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, chatId: ctx.chatId, text: input.what, dueTs: due, repeat });
+        const prox = new Date(due).toLocaleString('es-ES', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+        return `OK. Recordatorio recurrente: "${input.what}" (${describeRepeat(repeat)}). Próximo aviso: ${prox}.`;
+      }
+
       let dueTs;
       let cuandoTxt;
       if (input.inMinutes) {
@@ -223,7 +245,7 @@ async function executeTool(name, input, ctx) {
       const rs = listReminders(ctx.chatId);
       if (!rs.length) return 'No hay recordatorios pendientes.';
       return 'Recordatorios pendientes:\n' + rs.map((r) =>
-        `- "${r.text}" → ${new Date(r.dueTs).toLocaleString('es-ES', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}`,
+        `- "${r.text}" → ${new Date(r.dueTs).toLocaleString('es-ES', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}${r.repeat ? ' 🔁 (' + describeRepeat(r.repeat) + ')' : ''}`,
       ).join('\n');
     }
 

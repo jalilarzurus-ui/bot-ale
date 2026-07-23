@@ -9,7 +9,7 @@ import { sendText, flushQueue, getMedia } from './whatsapp.js';
 import { transcribe } from './transcribe.js';
 import { handleCommand } from './commands.js';
 import { conversationalReply } from './assistant.js';
-import { dueReminders, removeReminders } from './reminders.js';
+import { dueReminders, removeReminders, updateReminderDue, nextOccurrence } from './reminders.js';
 
 const app = express();
 app.use(express.json());
@@ -38,7 +38,14 @@ cron.schedule('* * * * *', async () => {
       } catch (e) {
         console.error('reminder send error:', e.message);
       }
-      done.push(r.id); // se quita aunque falle el envío, para no repetir
+      if (r.repeat) {
+        // recurrente: reprogramar al siguiente aviso en vez de borrarlo
+        const next = nextOccurrence(r.repeat, Date.now());
+        if (next) updateReminderDue(r.id, next);
+        else done.push(r.id);
+      } else {
+        done.push(r.id); // de una sola vez: se quita
+      }
     }
     removeReminders(done);
   } catch (e) {

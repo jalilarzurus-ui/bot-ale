@@ -10,7 +10,7 @@
 // "agrega" se interpreta con IA en lenguaje natural.
 import { createEvent, deleteEvent, moveEvent, eventsForDateParts, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
 import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda } from './briefing.js';
-import { addReminder } from './reminders.js';
+import { addReminder, nextOccurrence, describeRepeat } from './reminders.js';
 import { getWeather } from './weather.js';
 import { getCity, setCity } from './settings.js';
 
@@ -235,13 +235,17 @@ export async function parseReminderAI(text) {
     },
     body: JSON.stringify({
       model: 'claude-haiku-4-5',
-      max_tokens: 200,
+      max_tokens: 220,
       system:
         'Extrae un recordatorio del mensaje (en español). Responde SOLO con JSON, sin texto extra:\n' +
-        '{"what":"...","dayText":"...","hh":10,"mm":0,"inMinutes":null}\n' +
+        '{"what":"...","dayText":"...","hh":10,"mm":0,"inMinutes":null,"repeat":null,"dow":null,"dom":null}\n' +
         '- what: qué hay que recordar, corto y claro.\n' +
-        '- Si dice "en X minutos/horas" (ej: "en 30 minutos", "en 2 horas"), pon inMinutes con el total de minutos (2 horas = 120) y deja dayText, hh y mm en null.\n' +
-        '- Si dice un día u hora, pon inMinutes en null, y rellena dayText SOLO con la palabra del día ("hoy","mañana","pasado mañana","lunes"..."domingo","25/07","4 de agosto") — NO calcules la fecha — y hh, mm en formato 24h. Si no se dice hora, usa hh:9, mm:0.',
+        '- repeat: null si es una sola vez. "diario" si dice "cada día"/"todos los días". "semanal" si dice "cada lunes"/"todos los martes"... "mensual" si dice "cada día X del mes"/"el X de cada mes"/"todos los meses el X".\n' +
+        '- dow: SOLO para "semanal", el día como número (0=domingo,1=lunes,2=martes,3=miércoles,4=jueves,5=viernes,6=sábado).\n' +
+        '- dom: SOLO para "mensual", el número de día del mes (1-31).\n' +
+        '- hh, mm: hora del aviso en 24h (si no se dice, hh:9, mm:0). En recurrentes, dayText puede ir null.\n' +
+        '- Si dice "en X minutos/horas" (una sola vez), pon inMinutes con el total de minutos (2 horas = 120) y el resto null.\n' +
+        '- Si es una sola vez con día concreto, rellena dayText con la palabra del día ("hoy","mañana","lunes"..."domingo","25/07","4 de agosto") — NO calcules la fecha.',
       messages: [{ role: 'user', content: text }],
     }),
   });
@@ -374,6 +378,37 @@ export async function handleCommand(text, from) {
           'No entendí el recordatorio 🤔. Ejemplos: "recuérdame llamar al proveedor mañana a las 10" o "recuérdame en 30 minutos revisar el correo".',
       };
     }
+    // Recurrente ("cada día/lunes/5 del mes"): se reprograma solo tras cada aviso.
+    const mapRepeat = { diario: 'daily', semanal: 'weekly', mensual: 'monthly' };
+    if (r.repeat && mapRepeat[r.repeat]) {
+      const repeat = {
+        type: mapRepeat[r.repeat],
+        hh: r.hh ?? 9,
+        mm: r.mm ?? 0,
+        ...(r.repeat === 'semanal' ? { dow: Number(r.dow) } : {}),
+        ...(r.repeat === 'mensual' ? { dom: Number(r.dom) } : {}),
+      };
+      if (repeat.type === 'weekly' && !(repeat.dow >= 0 && repeat.dow <= 6)) {
+        return { reply: 'No entendí qué día de la semana 🤔. Ej: "recuérdame cada lunes a las 9 repartir bonos".' };
+      }
+      if (repeat.type === 'monthly' && !(repeat.dom >= 1 && repeat.dom <= 31)) {
+        return { reply: 'No entendí qué día del mes 🤔. Ej: "recuérdame el día 5 de cada mes a las 9 pagar la cuota".' };
+      }
+      const dueTs = nextOccurrence(repeat, Date.now());
+      if (!dueTs) return { reply: 'No pude calcular la repetición 🤔. Prueba de nuevo con el día y la hora.' };
+      addReminder({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        chatId: from,
+        text: r.what,
+        dueTs,
+        repeat,
+      });
+      const prox = new Date(dueTs).toLocaleString('es-ES', {
+        timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit',
+      });
+      return { reply: `🔁 Recordatorio recurrente activado: *${r.what}*\n📅 ${describeRepeat(repeat)}\n➡️ Próximo aviso: ${prox}` };
+    }
+
     let dueTs;
     if (r.inMinutes) {
       dueTs = Date.now() + Number(r.inMinutes) * 60000;
