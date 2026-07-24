@@ -7,6 +7,7 @@ import {
   recreateEvent, restoreEventTimes, madridDateParts, madridToUtc, TZ, CALENDARS,
 } from './calendar.js';
 import { setLastAction } from './undo.js';
+import { addTask, listTasks, removeTask } from './tasks.js';
 import { getCity } from './settings.js';
 import { addReminder, listReminders, removeReminder, nextOccurrence, describeRepeat } from './reminders.js';
 import { getWeather } from './weather.js';
@@ -153,6 +154,29 @@ const TOOLS = [
       properties: {
         keyword: { type: 'string', description: 'Palabra clave del recordatorio a cancelar (ej: "llamada", "correo").' },
       },
+      required: ['keyword'],
+    },
+  },
+  {
+    name: 'apuntar_pendiente',
+    description: 'Apunta un PENDIENTE / tarea SIN hora concreta (algo que hay que hacer y el bot recordará cada día hasta marcarlo hecho). Úsalo para "tengo que...", "apúntame que...", cosas sin hora fija. Si tiene hora concreta, usa poner_recordatorio.',
+    input_schema: {
+      type: 'object',
+      properties: { tarea: { type: 'string', description: 'Qué hay que hacer, corto y claro.' } },
+      required: ['tarea'],
+    },
+  },
+  {
+    name: 'ver_pendientes',
+    description: 'Lista los pendientes/tareas sin hora del usuario.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'completar_pendiente',
+    description: 'Marca un pendiente como hecho (por palabra clave).',
+    input_schema: {
+      type: 'object',
+      properties: { keyword: { type: 'string', description: 'Palabra clave del pendiente a dar por hecho.' } },
       required: ['keyword'],
     },
   },
@@ -333,6 +357,27 @@ async function executeTool(name, input, ctx) {
       return `OK. Recordatorio cancelado: "${rs[0].text}".`;
     }
 
+    if (name === 'apuntar_pendiente') {
+      const txt = (input.tarea || '').trim();
+      if (!txt) return 'Falta qué apuntar.';
+      addTask(ctx.chatId, txt);
+      return `OK. Apuntado en pendientes: "${txt}". Se lo recordaré cada día hasta que lo dé por hecho.`;
+    }
+
+    if (name === 'ver_pendientes') {
+      const ts = listTasks(ctx.chatId);
+      if (!ts.length) return 'No hay pendientes. Todo al día.';
+      return 'Pendientes:\n' + ts.map((x, i) => `${i + 1}. ${x.text}`).join('\n');
+    }
+
+    if (name === 'completar_pendiente') {
+      const ts = listTasks(ctx.chatId).filter((x) => norm(x.text).includes(norm(input.keyword)));
+      if (!ts.length) return `No hay ningún pendiente con "${input.keyword}".`;
+      if (ts.length > 1) return `Hay varios pendientes con "${input.keyword}": ${ts.map((x) => x.text).join('; ')}. Pide al usuario que precise cuál.`;
+      removeTask(ts[0].id);
+      return `OK. Pendiente hecho: "${ts[0].text}".`;
+    }
+
     if (name === 'consultar_clima') {
       const w = await getWeather(input.city || getCity());
       if (!w) return 'No pude obtener el clima.';
@@ -364,6 +409,8 @@ export async function conversationalReply(chatId, text, who = 'Jalil') {
   const recsTxt = recs.length
     ? recs.map((r) => `- "${r.text}" → ${new Date(r.dueTs).toLocaleString('es-ES', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`).join('\n')
     : 'Ninguno.';
+  const tareas = listTasks(chatId);
+  const tareasTxt = tareas.length ? tareas.map((x) => `- ${x.text}`).join('\n') : 'Ninguno.';
   const ahora = new Date();
   const hoy = ahora.toLocaleDateString('es-ES', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const horaNum = Number(ahora.toLocaleString('en-US', { timeZone: TZ, hour: '2-digit', hour12: false }));
@@ -373,15 +420,17 @@ export async function conversationalReply(chatId, text, who = 'Jalil') {
     : 'Estás hablando con Jalil, el asistente de confianza de Ale que organiza su día contigo. Habláis de tú a tú, en corto.';
 
   const system =
-    'Eres el jefe de gabinete personal por WhatsApp de un empresario (Ale). Eres su mano derecha digital, y puedes ACTUAR (crear, mover y cancelar eventos, y poner/cancelar recordatorios) usando tus herramientas.\n' +
+    'Eres el jefe de gabinete personal por WhatsApp de un empresario (Ale). Eres su mano derecha digital, y puedes ACTUAR (crear/mover/cancelar eventos, poner/cancelar recordatorios, apuntar/completar pendientes) usando tus herramientas.\n' +
     `${quien}\n` +
     `Es ${franja} de hoy, ${hoy}. Ciudad actual: ${getCity()}.${clima ? ' Clima ahora: ' + clima + '.' : ''}\n\n` +
     'PERSONALIDAD: cercano pero profesional, directo, resolutivo y proactivo. Español natural, frases cortas y humanas, nunca sonando a robot. Algún emoji con moderación.\n\n' +
     'AGENDA de los próximos 8 días (Europe/Madrid):\n' +
     `${agenda}\n\n` +
     `RECORDATORIOS PENDIENTES:\n${recsTxt}\n\n` +
+    `PENDIENTES SIN HORA (tareas por hacer):\n${tareasTxt}\n\n` +
     'CÓMO ACTÚAS:\n' +
     '- Cuando te pidan crear/mover/cancelar un evento o poner un recordatorio, HAZLO con la herramienta correspondiente (no te limites a decir cómo). Pasa el día en palabras (hoy, mañana, jueves, 25/07...) — el sistema calcula la fecha exacta.\n' +
+    '- Si algo tiene HORA concreta → recordatorio (poner_recordatorio). Si es algo que hay que hacer SIN hora fija ("tengo que...", "apúntame que...") → pendiente (apuntar_pendiente). Cuando digan que ya hicieron algo, usa completar_pendiente.\n' +
     '- Si falta un dato imprescindible (p. ej. la hora, o qué evento exacto cuando hay varios), pregunta en una línea en vez de adivinar.\n' +
     '- Para preguntas sobre la agenda, usa la lista de arriba; para fechas lejanas usa consultar_agenda. NUNCA inventes eventos.\n' +
     '- Sé proactivo: si ves un choque de horarios o algo relevante, coméntalo brevemente.\n' +
