@@ -471,18 +471,32 @@ export async function handleCommand(text, from) {
     }
   }
 
-  // POSPONER el último recordatorio que sonó: "pospón 1 hora", "recuérdamelo en 30 min", "más tarde".
-  if (/^(pospon|pospón|posponer|recu[eé]rdamelo|m[aá]s tarde|luego)\b/i.test(t)) {
+  // POSPONER lo último que sonó (recordatorio o aviso de evento):
+  // "pospón 1 hora" / "recuérdamelo en 30 min" (desde ahora)
+  // "recuérdamelo faltando 10 min" / "10 min antes" (relativo a la hora del evento)
+  if (/^(pospon|pospón|posponer|recu[eé]rdamelo|av[ií]same|m[aá]s tarde|luego)\b/i.test(t)) {
     const last = getLastFired(from);
     if (!last) {
-      return { reply: 'No tengo ningún recordatorio reciente que posponer 🤔. Crea uno con "recuérdame ..." o dime "recuérdame X en 30 min".' };
+      return { reply: 'No tengo ningún aviso reciente que posponer 🤔. Cuando te suene un recordatorio o un aviso de evento, dime "recuérdamelo en 30 min" o "faltando 10 min".' };
     }
     const min = parseDelayMin(t) ?? 15;
-    const dueTs = Date.now() + min * 60000;
-    addReminder({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, chatId: from, text: last, dueTs });
+    // "faltando/antes" → relativo al inicio del evento (si lo conocemos)
+    const before = /\b(antes|faltando|falt\w*|para que (empiece|sea|llegue|inicie))\b/.test(tn) && last.eventStartTs;
+    let dueTs;
+    if (before) {
+      dueTs = last.eventStartTs - min * 60000;
+      if (dueTs <= Date.now()) {
+        const minsToEvent = Math.max(0, Math.round((last.eventStartTs - Date.now()) / 60000));
+        return { reply: `⏳ *${last.text}* es en unos ${minsToEvent} min, así que faltando ${min} min ya pasó. ¿Te lo recuerdo *ahora* o dime otra hora.` };
+      }
+    } else {
+      dueTs = Date.now() + min * 60000;
+    }
+    addReminder({ id: rid(), chatId: from, text: last.text, dueTs });
     const cuando = new Date(dueTs).toLocaleTimeString('es-ES', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
     const cuanto = min >= 60 && min % 60 === 0 ? `${min / 60} h` : `${min} min`;
-    return { reply: `⏰ Vale, te lo recuerdo otra vez en *${cuanto}*: *${last}* (a las ${cuando}).` };
+    const como = before ? `${cuanto} antes` : `en ${cuanto}`;
+    return { reply: `⏰ Hecho, te lo recuerdo *${como}*: *${last.text}* (a las ${cuando}).` };
   }
 
   // BUSCAR eventos por palabra clave ("¿cuándo es el vuelo?", "busca la reunión con Juan").

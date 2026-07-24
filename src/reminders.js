@@ -30,10 +30,11 @@ export function addReminder(r) {
   persist();
 }
 
-// Último recordatorio que sonó por chat (para poder "posponerlo").
+// Último aviso que sonó por chat (recordatorio o aviso de evento), para poder "posponerlo".
+// eventStartTs: si vino de un evento, la hora de inicio del evento (para "faltando X min").
 const lastFired = new Map();
-export function setLastFired(chatId, text) {
-  lastFired.set(chatId, text);
+export function setLastFired(chatId, text, eventStartTs = null) {
+  lastFired.set(chatId, { text, eventStartTs });
 }
 export function getLastFired(chatId) {
   return lastFired.get(chatId) || null;

@@ -87,6 +87,8 @@ cron.schedule('*/5 * * * *', async () => {
         const tag = cal?.emoji ? ` ${cal.emoji}` : '';
         try {
           await sendText(JALIL, `⏰ *En ${mins} min:* ${it.ev.summary} (${hora})${tag}`);
+          // Permitir posponerlo: guardamos el evento y su hora de inicio ("recuérdamelo faltando 10 min").
+          setLastFired(JALIL, it.ev.summary, startMs);
         } catch (e) {
           console.error('alert send error:', e.message);
           alerted.delete(it.ev.id); // si falló el envío, permitir reintento en la próxima pasada
