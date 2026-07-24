@@ -9,7 +9,7 @@
 // Si ANTHROPIC_API_KEY está configurada, cualquier otro texto que empiece por
 // "agrega" se interpreta con IA en lenguaje natural.
 import { createEvent, deleteEvent, moveEvent, recreateEvent, restoreEventTimes, eventsForDateParts, eventsForRange, overlappingEvents, findDuplicate, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
-import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda, weeklyBriefing, nextUp } from './briefing.js';
+import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda, weeklyBriefing, nextUp, myDay } from './briefing.js';
 import { addReminder, nextOccurrence, describeRepeat, listReminders, removeReminder, getLastFired } from './reminders.js';
 import { getWeather } from './weather.js';
 import { getCity, setCity, getAlertsOn, setAlertsOn, getAlertLead, setAlertLead } from './settings.js';
@@ -303,6 +303,7 @@ function helpMenu() {
     '🤖 *Esto es lo que puedo hacer* (háblame natural, no hace falta memorizar):',
     '',
     '🗓️ *Agenda*',
+    '• "mi día" — todo lo de hoy de un vistazo (agenda + recordatorios + pendientes + clima)',
     '• "agenda hoy" · "agenda mañana" · "agenda viernes" · "agenda esta semana"',
     '• "resumen semana" — la semana que viene de un vistazo',
     '• "qué sigue" — lo próximo en tu agenda',
@@ -348,8 +349,9 @@ function applyReminder(r, from) {
     if (repeat.type === 'monthly' && !(repeat.dom >= 1 && repeat.dom <= 31)) return { error: `No entendí qué día del mes para "${nl}".` };
     const dueTs = nextOccurrence(repeat, Date.now());
     if (!dueTs) return { error: `No pude calcular la repetición de "${nl}".` };
-    addReminder({ id: rid(), chatId: from, text: nl, dueTs, repeat });
-    return { line: `🔁 *${nl}* — ${describeRepeat(repeat)}` };
+    const id = rid();
+    addReminder({ id, chatId: from, text: nl, dueTs, repeat });
+    return { line: `🔁 *${nl}* — ${describeRepeat(repeat)}`, id };
   }
   let dueTs;
   if (r.inMinutes) {
@@ -360,9 +362,10 @@ function applyReminder(r, from) {
     dueTs = madridToUtc(dp.y, dp.m, dp.d, r.hh ?? 9, r.mm ?? 0).getTime();
   }
   if (dueTs < Date.now() - 60000) return { error: `La hora de "${nl}" ya pasó.` };
-  addReminder({ id: rid(), chatId: from, text: nl, dueTs });
+  const id = rid();
+  addReminder({ id, chatId: from, text: nl, dueTs });
   const cuando = new Date(dueTs).toLocaleString('es-ES', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-  return { line: `⏰ *${nl}* — ${cuando}` };
+  return { line: `⏰ *${nl}* — ${cuando}`, id };
 }
 
 // Interpreta un retraso en minutos de frases como "1 hora", "30 min", "media hora",
@@ -516,7 +519,11 @@ export async function handleCommand(text, from) {
     if (mAdd) {
       const txt = mAdd[1].trim().replace(/[.\s]+$/, '');
       if (txt.length >= 2) {
-        addTask(from, txt);
+        const task = addTask(from, txt);
+        setLastAction(from, {
+          describe: 'apuntar pendiente',
+          undo: async () => { removeTask(task.id); return `↩️ Deshecho: quité el pendiente *${txt}*.`; },
+        });
         const n = listTasks(from).length;
         return { reply: `📝 Apuntado en pendientes: *${txt}*. (Tienes ${n}.) Te lo recordaré hasta que digas "hecho".` };
       }
@@ -696,14 +703,23 @@ export async function handleCommand(text, from) {
     }
     const lines = [];
     const errors = [];
+    const createdIds = [];
     for (const r of items) {
       const res = applyReminder(r, from);
       if (res.error) errors.push('• ' + res.error);
-      else lines.push('• ' + res.line);
+      else { lines.push('• ' + res.line); createdIds.push(res.id); }
     }
     if (!lines.length) {
       return { reply: `No pude crear ${items.length > 1 ? 'los recordatorios' : 'el recordatorio'} 🤔.\n${errors.join('\n')}` };
     }
+    // Permitir "deshacer" (quita todos los recién creados).
+    setLastAction(from, {
+      describe: createdIds.length > 1 ? `poner ${createdIds.length} recordatorios` : 'poner recordatorio',
+      undo: async () => {
+        createdIds.forEach((id) => removeReminder(id));
+        return `↩️ Deshecho: quité ${createdIds.length > 1 ? `los ${createdIds.length} recordatorios` : 'el recordatorio'}.`;
+      },
+    });
     let reply = lines.length === 1
       ? `Hecho ✅ Te lo recuerdo:\n${lines[0].slice(2)}`
       : `Hecho ✅ Te recuerdo estas *${lines.length}* cosas:\n${lines.join('\n')}`;
@@ -726,6 +742,11 @@ export async function handleCommand(text, from) {
 
   if (t === 'agenda hoy') return { reply: await morningBriefing() };
   if (t === 'agenda mañana' || t === 'agenda manana') return { reply: await nightBriefing() };
+
+  // "mi día" → panel único de hoy (clima + agenda + recordatorios + pendientes)
+  if (/^(mi dia|resumen de hoy|resumen del dia|como va (mi dia|el dia|hoy)|buenos dias|buen dia|mi jornada)$/.test(tn)) {
+    return { reply: await myDay(from) };
+  }
 
   // "qué sigue" / "lo siguiente" / "ahora" → el próximo evento desde ahora
   if (/^(que sigue|lo que sigue|lo siguiente|que viene|siguiente evento|proximo evento|que tengo ahora|que hay ahora)\b/.test(tn) || tn === 'siguiente' || tn === 'ahora') {

@@ -1,7 +1,9 @@
 // Redacción de los mensajes de briefing (formato WhatsApp)
-import { eventsForDay, eventsForDateParts, eventsForRange, madridDateParts, TZ } from './calendar.js';
+import { eventsForDay, eventsForDateParts, eventsForRange, madridDateParts, madridToUtc, TZ } from './calendar.js';
 import { getWeather } from './weather.js';
 import { getCity } from './settings.js';
+import { listReminders } from './reminders.js';
+import { listTasks } from './tasks.js';
 
 const DAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
@@ -100,6 +102,43 @@ export async function weeklyBriefing() {
     }
     lines.push(eventLine(item));
   }
+  return lines.join('\n');
+}
+
+// "Mi día" — panel único de hoy para una persona: clima + agenda + recordatorios de hoy + pendientes.
+export async function myDay(chatId) {
+  const now = Date.now();
+  const t = madridDateParts(0);
+  const endToday = madridToUtc(t.y, t.m, t.d, 23, 59).getTime();
+  const [today, clima] = await Promise.all([
+    eventsForDay(0),
+    getWeather(getCity()).then((w) => (w ? `${w.emoji} ${w.tempC}°C, ${w.desc} en ${w.city}` : '')).catch(() => ''),
+  ]);
+
+  const lines = [`☀️ *Tu día — ${fmtDate(today.dateParts)}*`];
+  if (clima) lines.push(clima);
+
+  lines.push('', '🗓️ *Agenda*');
+  if (!today.events.length) lines.push('• Sin eventos hoy 👌');
+  else for (const it of today.events) lines.push(eventLine(it));
+
+  const rs = listReminders(chatId)
+    .filter((r) => r.dueTs >= now - 60000 && r.dueTs <= endToday)
+    .sort((a, b) => a.dueTs - b.dueTs);
+  if (rs.length) {
+    lines.push('', '⏰ *Recordatorios de hoy*');
+    for (const r of rs) {
+      const hora = new Date(r.dueTs).toLocaleTimeString('es-ES', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+      lines.push(`• ${hora} — ${r.text}${r.repeat ? ' 🔁' : ''}`);
+    }
+  }
+
+  const ts = listTasks(chatId);
+  if (ts.length) {
+    lines.push('', '📝 *Pendientes*');
+    ts.forEach((x, i) => lines.push(`${i + 1}. ${x.text}`));
+  }
+
   return lines.join('\n');
 }
 

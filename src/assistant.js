@@ -300,7 +300,9 @@ async function executeTool(name, input, ctx) {
         if (repeat.type === 'monthly' && !(repeat.dom >= 1 && repeat.dom <= 31)) return 'Falta qué día del mes. Pregunta al usuario.';
         const due = nextOccurrence(repeat, Date.now());
         if (!due) return 'No pude calcular la repetición. Pide una aclaración.';
-        addReminder({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, chatId: ctx.chatId, text: input.what, dueTs: due, repeat });
+        const idR = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        addReminder({ id: idR, chatId: ctx.chatId, text: input.what, dueTs: due, repeat });
+        setLastAction(ctx.chatId, { describe: 'poner recordatorio', undo: async () => { removeReminder(idR); return `↩️ Deshecho: quité el recordatorio *${input.what}*.`; } });
         const prox = new Date(due).toLocaleString('es-ES', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
         return `OK. Recordatorio recurrente: "${input.what}" (${describeRepeat(repeat)}). Próximo aviso: ${prox}.`;
       }
@@ -315,7 +317,9 @@ async function executeTool(name, input, ctx) {
         dueTs = madridToUtc(dp.y, dp.m, dp.d, input.hh ?? 9, input.mm ?? 0).getTime();
       }
       if (dueTs < Date.now() - 60000) return 'Esa hora ya pasó. Pide una hora futura.';
-      addReminder({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, chatId: ctx.chatId, text: input.what, dueTs });
+      const idR = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      addReminder({ id: idR, chatId: ctx.chatId, text: input.what, dueTs });
+      setLastAction(ctx.chatId, { describe: 'poner recordatorio', undo: async () => { removeReminder(idR); return `↩️ Deshecho: quité el recordatorio *${input.what}*.`; } });
       cuandoTxt = new Date(dueTs).toLocaleString('es-ES', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
       return `OK. Recordatorio puesto: "${input.what}" para ${cuandoTxt}.`;
     }
@@ -360,7 +364,8 @@ async function executeTool(name, input, ctx) {
     if (name === 'apuntar_pendiente') {
       const txt = (input.tarea || '').trim();
       if (!txt) return 'Falta qué apuntar.';
-      addTask(ctx.chatId, txt);
+      const task = addTask(ctx.chatId, txt);
+      setLastAction(ctx.chatId, { describe: 'apuntar pendiente', undo: async () => { removeTask(task.id); return `↩️ Deshecho: quité el pendiente *${txt}*.`; } });
       return `OK. Apuntado en pendientes: "${txt}". Se lo recordaré cada día hasta que lo dé por hecho.`;
     }
 
