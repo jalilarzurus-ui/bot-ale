@@ -8,12 +8,13 @@
 //
 // Si ANTHROPIC_API_KEY está configurada, cualquier otro texto que empiece por
 // "agrega" se interpreta con IA en lenguaje natural.
-import { createEvent, deleteEvent, moveEvent, eventsForDateParts, eventsForRange, overlappingEvents, findDuplicate, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
+import { createEvent, deleteEvent, moveEvent, recreateEvent, restoreEventTimes, eventsForDateParts, eventsForRange, overlappingEvents, findDuplicate, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
 import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda, weeklyBriefing, nextUp } from './briefing.js';
 import { addReminder, nextOccurrence, describeRepeat, listReminders, removeReminder, getLastFired } from './reminders.js';
 import { getWeather } from './weather.js';
 import { getCity, setCity, getAlertsOn, setAlertsOn, getAlertLead, setAlertLead } from './settings.js';
 import { setPending } from './confirm.js';
+import { setLastAction, getLastAction, clearLastAction } from './undo.js';
 import { anthropic, jsonOf, textOf, AI_DOWN, MODEL_FAST, MODEL_SMART } from './ai.js';
 
 // Mensaje cuando la IA está caída/saturada (para no parecer "tonto" ni quedarse mudo).
@@ -287,6 +288,7 @@ function helpMenu() {
     '• "agenda comida con el inversor el jueves a las 2"',
     '• "mueve la reunión del viernes a las 5" · "cancela la comida del jueves"',
     '  (antes de borrar o mover te pido confirmación; y aviso si hay choque de horario)',
+    '• "deshacer" — revierte lo último que hiciste (crear/mover/cancelar), por si te equivocas',
     '',
     '⏰ *Recordatorios*',
     '• "recuérdame llamar al proveedor mañana a las 10" · "...en 30 min"',
@@ -350,6 +352,14 @@ export async function handleCommand(text, from) {
   const t = text.trim().toLowerCase();
   // Versión sin acentos: evita el fallo de \b tras vocal acentuada al final ("menú", "qué").
   const tn = t.normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+  // "deshacer" : revierte la última acción (crear/cancelar/mover un evento)
+  if (/^(deshacer|deshaz|undo|revierte|revertir|vuelve atras|marcha atras)\b/.test(tn)) {
+    const a = getLastAction(from);
+    if (!a) return { reply: 'No hay ninguna acción reciente que deshacer 🤔. (Solo puedo deshacer lo último, dentro de 10 min.)' };
+    clearLastAction(from);
+    return { reply: await a.undo() };
+  }
 
   // Gestión de recordatorios: LISTAR ("mis recordatorios") y CANCELAR ("cancela recordatorio 2").
   // Va antes que la gestión de eventos para que "cancela recordatorio ..." no se tome por un evento.
@@ -478,6 +488,8 @@ export async function handleCommand(text, from) {
       const nuevaHora = `${String(p.newHh).padStart(2, '0')}:${String(p.newMm ?? 0).padStart(2, '0')}`;
       // ¿La nueva hora choca con otra cosa? (ignorando el propio evento que movemos)
       const clashes = await overlappingEvents(target.y, target.m, target.d, p.newHh, p.newMm ?? 0, durMin, it.ev.id).catch(() => []);
+      const origStart = it.ev.start; // guardamos para poder deshacer el movimiento
+      const origEnd = it.ev.end;
       // No movemos de golpe: pedimos confirmación.
       setPending(from, {
         describe: `mover "${it.ev.summary}"`,
@@ -487,6 +499,14 @@ export async function handleCommand(text, from) {
           } catch (e) {
             return `⚠️ No pude moverlo: ${e?.errors?.[0]?.message || e.message}`;
           }
+          setLastAction(from, {
+            describe: `mover "${it.ev.summary}"`,
+            undo: async () => {
+              try { await restoreEventTimes(it.calKey, it.ev.id, origStart, origEnd); }
+              catch (e) { return `⚠️ No pude deshacer: ${e?.errors?.[0]?.message || e.message}`; }
+              return `↩️ Deshecho: devolví *${it.ev.summary}* a su hora original.`;
+            },
+          });
           return `📅 Movido: *${it.ev.summary}* → ${target.d}/${target.m} ${nuevaHora} (${CALENDARS[it.calKey].label})`;
         },
       });
@@ -506,6 +526,15 @@ export async function handleCommand(text, from) {
         } catch (e) {
           return `⚠️ No pude cancelarlo: ${e?.errors?.[0]?.message || e.message}`;
         }
+        // Guardar para "deshacer" (recrear el evento cancelado).
+        setLastAction(from, {
+          describe: `cancelar "${it.ev.summary}"`,
+          undo: async () => {
+            try { await recreateEvent(it.calKey, it.ev); }
+            catch (e) { return `⚠️ No pude deshacer: ${e?.errors?.[0]?.message || e.message}`; }
+            return `↩️ Deshecho: restauré *${it.ev.summary}*.`;
+          },
+        });
         return `🗑️ Cancelado: *${it.ev.summary}* — ${dp.d}/${dp.m} (${CALENDARS[it.calKey].label})`;
       },
     });
@@ -700,13 +729,24 @@ export async function handleCommand(text, from) {
     if (!parsed.allDay) {
       clashes = await overlappingEvents(parsed.y, parsed.m, parsed.d, parsed.hh, parsed.mm, parsed.durMin).catch(() => []);
     }
+    let created;
     try {
-      await createEvent(parsed);
+      created = await createEvent(parsed);
     } catch (e) {
       return {
         reply: `⚠️ Entendí *${parsed.summary}* pero no pude crearlo: ${e?.errors?.[0]?.message || e.message}`,
       };
     }
+    // Guardar para poder "deshacer" (borrar lo recién creado).
+    const calKeyCreated = parsed.calKey || 'actividades';
+    setLastAction(from, {
+      describe: `crear "${parsed.summary}"`,
+      undo: async () => {
+        try { await deleteEvent(calKeyCreated, created.id); }
+        catch (e) { return `⚠️ No pude deshacer: ${e?.errors?.[0]?.message || e.message}`; }
+        return `↩️ Deshecho: quité *${parsed.summary}*.`;
+      },
+    });
     const cal = CALENDARS[parsed.calKey || 'actividades'];
     let reply = `✅ Agregado a ${cal.label}: *${parsed.summary}* — ${parsed.allDay ? 'todo el día' : `${parsed.d}/${parsed.m} ${String(parsed.hh).padStart(2, '0')}:${String(parsed.mm).padStart(2, '0')}`}`;
     if (clashes.length) {

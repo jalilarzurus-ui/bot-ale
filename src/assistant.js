@@ -4,8 +4,9 @@
 // las calcula el código, nunca la IA).
 import {
   eventsForRange, eventsForDateParts, createEvent, deleteEvent, moveEvent, overlappingEvents, findDuplicate,
-  madridDateParts, madridToUtc, TZ, CALENDARS,
+  recreateEvent, restoreEventTimes, madridDateParts, madridToUtc, TZ, CALENDARS,
 } from './calendar.js';
+import { setLastAction } from './undo.js';
 import { getCity } from './settings.js';
 import { addReminder, listReminders, removeReminder, nextOccurrence, describeRepeat } from './reminders.js';
 import { getWeather } from './weather.js';
@@ -180,10 +181,19 @@ async function executeTool(name, input, ctx) {
       if (dup) return `YA EXISTE ese evento ("${input.summary}") a esa hora. NO lo crees de nuevo; avísale al usuario de que ya lo tenía.`;
       // Mirar choques antes de crear (solo si tiene hora).
       const clashes = allDay ? [] : await overlappingEvents(dp.y, dp.m, dp.d, input.hh, input.mm ?? 0, durMin).catch(() => []);
-      await createEvent({
-        calKey: validCal(input.calKey), summary: input.summary,
+      const calKeyC = validCal(input.calKey);
+      const createdEv = await createEvent({
+        calKey: calKeyC, summary: input.summary,
         y: dp.y, m: dp.m, d: dp.d, hh: input.hh, mm: input.mm ?? 0,
         durMin, allDay,
+      });
+      setLastAction(ctx.chatId, {
+        describe: `crear "${input.summary}"`,
+        undo: async () => {
+          try { await deleteEvent(calKeyC, createdEv.id); }
+          catch (e) { return `⚠️ No pude deshacer: ${e?.errors?.[0]?.message || e.message}`; }
+          return `↩️ Deshecho: quité *${input.summary}*.`;
+        },
       });
       const cuando = allDay ? `${dp.d}/${dp.m} (todo el día)` : `${dp.d}/${dp.m} a las ${String(input.hh).padStart(2, '0')}:${String(input.mm ?? 0).padStart(2, '0')}`;
       const aviso = clashes.length
@@ -206,6 +216,14 @@ async function executeTool(name, input, ctx) {
           exec: async () => {
             try { await deleteEvent(it.calKey, it.ev.id); }
             catch (e) { return `⚠️ No pude cancelarlo: ${e?.errors?.[0]?.message || e.message}`; }
+            setLastAction(ctx.chatId, {
+              describe: `cancelar "${it.ev.summary}"`,
+              undo: async () => {
+                try { await recreateEvent(it.calKey, it.ev); }
+                catch (e) { return `⚠️ No pude deshacer: ${e?.errors?.[0]?.message || e.message}`; }
+                return `↩️ Deshecho: restauré *${it.ev.summary}*.`;
+              },
+            });
             return `🗑️ Cancelado: "${it.ev.summary}" del ${dp.d}/${dp.m}.`;
           },
         });
@@ -221,11 +239,21 @@ async function executeTool(name, input, ctx) {
       }
       const nuevaHora = `${String(input.newHh).padStart(2, '0')}:${String(input.newMm ?? 0).padStart(2, '0')}`;
       const clashes = await overlappingEvents(target.y, target.m, target.d, input.newHh, input.newMm ?? 0, durMin, it.ev.id).catch(() => []);
+      const origStart = it.ev.start;
+      const origEnd = it.ev.end;
       setPending(ctx.chatId, {
         describe: `mover "${it.ev.summary}"`,
         exec: async () => {
           try { await moveEvent(it.calKey, it.ev.id, target.y, target.m, target.d, input.newHh, input.newMm ?? 0, durMin); }
           catch (e) { return `⚠️ No pude moverlo: ${e?.errors?.[0]?.message || e.message}`; }
+          setLastAction(ctx.chatId, {
+            describe: `mover "${it.ev.summary}"`,
+            undo: async () => {
+              try { await restoreEventTimes(it.calKey, it.ev.id, origStart, origEnd); }
+              catch (e) { return `⚠️ No pude deshacer: ${e?.errors?.[0]?.message || e.message}`; }
+              return `↩️ Deshecho: devolví *${it.ev.summary}* a su hora original.`;
+            },
+          });
           return `📅 Movido: "${it.ev.summary}" a ${target.d}/${target.m} ${nuevaHora}.`;
         },
       });

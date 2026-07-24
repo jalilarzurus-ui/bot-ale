@@ -172,6 +172,38 @@ export async function overlappingEvents(y, m, d, hh, mm, durMin = 60, ignoreId =
   return out;
 }
 
+// Reinserta un evento a partir de su objeto original (para DESHACER una cancelación).
+// Devuelve el evento recreado.
+export async function recreateEvent(calKey, ev) {
+  const cal = getClient();
+  const c = CALENDARS[calKey] || CALENDARS.actividades;
+  const resource = { summary: ev.summary };
+  if (ev.start?.dateTime) {
+    resource.start = { dateTime: ev.start.dateTime, timeZone: TZ };
+    resource.end = { dateTime: ev.end?.dateTime || ev.start.dateTime, timeZone: TZ };
+  } else {
+    resource.start = { date: ev.start?.date };
+    resource.end = { date: ev.end?.date || ev.start?.date };
+  }
+  const res = await cal.events.insert({ calendarId: c.id, resource });
+  return res.data;
+}
+
+// Restaura las fechas de un evento a unas start/end dadas (para DESHACER un movimiento).
+export async function restoreEventTimes(calKey, eventId, start, end) {
+  const cal = getClient();
+  const c = CALENDARS[calKey] || CALENDARS.actividades;
+  const resource = {};
+  if (start?.dateTime) {
+    resource.start = { dateTime: start.dateTime, timeZone: TZ };
+    resource.end = { dateTime: (end?.dateTime) || start.dateTime, timeZone: TZ };
+  } else {
+    resource.start = { date: start?.date };
+    resource.end = { date: end?.date || start?.date };
+  }
+  await cal.events.patch({ calendarId: c.id, eventId, resource });
+}
+
 // Busca un evento IDÉNTICO ya existente (mismo título + misma fecha/hora) para no duplicar
 // al crear. Devuelve el evento encontrado (con calKey) o null.
 export async function findDuplicate(summary, y, m, d, hh, mm, allDay) {
