@@ -13,6 +13,7 @@ import { dueReminders, removeReminders, updateReminderDue, nextOccurrence, setLa
 import { getPending, clearPending, isYes, isNo } from './confirm.js';
 import { eventsForDay, CALENDARS, TZ } from './calendar.js';
 import { getAlertsOn, getAlertLead } from './settings.js';
+import { listTasks } from './tasks.js';
 
 const app = express();
 app.use(express.json());
@@ -30,6 +31,20 @@ cron.schedule('0 7 * * *', () => runBriefing('morning'), { timezone: 'Europe/Mad
 cron.schedule('0 23 * * *', () => runBriefing('night'), { timezone: 'Europe/Madrid' });
 // Domingo 20:00 → resumen de la semana que viene (para planificar con Ale).
 cron.schedule('0 20 * * 0', () => runBriefing('week'), { timezone: 'Europe/Madrid' });
+// Pendientes: recordatorio a Jalil por la mañana (10:00) y por la tarde (18:00), si hay.
+cron.schedule('0 10 * * *', () => nudgeTasks(), { timezone: 'Europe/Madrid' });
+cron.schedule('0 18 * * *', () => nudgeTasks(), { timezone: 'Europe/Madrid' });
+
+async function nudgeTasks() {
+  try {
+    const ts = listTasks(JALIL);
+    if (!ts.length) return;
+    const lines = ts.map((x, i) => `${i + 1}. ${x.text}`);
+    await sendText(JALIL, `📝 *Pendientes que tienes* (${ts.length}):\n${lines.join('\n')}\n\nCuando hagas alguno dime "hecho 1" y lo quito.`);
+  } catch (e) {
+    console.error('nudge tasks error:', e.message);
+  }
+}
 
 // Recordatorios: cada minuto, avisa de los que ya toca.
 cron.schedule('* * * * *', async () => {

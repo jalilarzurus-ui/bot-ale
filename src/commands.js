@@ -15,6 +15,7 @@ import { getWeather } from './weather.js';
 import { getCity, setCity, getAlertsOn, setAlertsOn, getAlertLead, setAlertLead } from './settings.js';
 import { setPending } from './confirm.js';
 import { setLastAction, getLastAction, clearLastAction } from './undo.js';
+import { addTask, listTasks, removeTask } from './tasks.js';
 import { anthropic, jsonOf, textOf, AI_DOWN, MODEL_FAST, MODEL_SMART } from './ai.js';
 
 // Mensaje cuando la IA está caída/saturada (para no parecer "tonto" ni quedarse mudo).
@@ -320,6 +321,10 @@ function helpMenu() {
     '• "mis recordatorios" · "cancela recordatorio 2" · "pospón 1 hora"',
     '• Te aviso solo ~30 min antes de cada evento ("avisos 15", "avisos off")',
     '',
+    '📝 *Pendientes (cosas sin hora, te las recuerdo hasta que las hagas)*',
+    '• "pendiente llamar al banco" · "tarea preparar el informe"',
+    '• "pendientes" (ver la lista) · "hecho 1" o "hecho el banco" (marcar hecho)',
+    '',
     '🌦️ *Extras*',
     '• "clima" · "ciudad Dubái" · "ia redáctame un correo..." (redactar/traducir/resumir)',
     '• Puedes mandarme *notas de voz* y te confirmo qué entendí 🎤',
@@ -468,6 +473,53 @@ export async function handleCommand(text, from) {
         return `${i + 1}. *${r.text}* → ${cuando}${r.repeat ? ' 🔁 (' + describeRepeat(r.repeat) + ')' : ''}`;
       });
       return { reply: `📋 Tus recordatorios (${rs.length}):\n${lines.join('\n')}\n\nPara borrar uno: "cancela recordatorio 2".` };
+    }
+  }
+
+  // PENDIENTES / TAREAS (sin hora): añadir, listar y marcar hechas. El bot te las recuerda cada día.
+  {
+    // Listar
+    if (/^(mis (pendientes|tareas)|pendientes|tareas|que tengo pendiente)$/.test(tn)) {
+      const ts = listTasks(from);
+      if (!ts.length) return { reply: '✅ No tienes pendientes. ¡Todo al día! 💪' };
+      const lines = ts.map((x, i) => `${i + 1}. ${x.text}`);
+      return { reply: `📝 Tus pendientes (${ts.length}):\n${lines.join('\n')}\n\nMarca uno hecho: "hecho 2" o "hecho el banco".` };
+    }
+    // Marcar hecho
+    const mDone = tn.match(/^(?:hecho|listo|completad[oa]|complete|termin[eé]|ya (?:hice|termin[eé]|complet[eé])|hice)\b\s*(.*)$/);
+    if (mDone) {
+      const ts = listTasks(from);
+      if (!ts.length) return { reply: 'No tienes pendientes apuntados 🤔.' };
+      const arg = (mDone[1] || '').trim();
+      let target = null;
+      const num = arg.match(/^(\d{1,2})$/);
+      if (num) {
+        const idx = Number(num[1]) - 1;
+        if (idx < 0 || idx >= ts.length) return { reply: `Solo tienes ${ts.length} pendiente(s). Escribe "pendientes" para verlos.` };
+        target = ts[idx];
+      } else if (arg) {
+        const hits = ts.filter((x) => norm(x.text).includes(norm(arg)));
+        if (!hits.length) return { reply: `No encontré ningún pendiente con "${arg}". Escribe "pendientes" para ver la lista.` };
+        if (hits.length > 1) return { reply: `Hay varios con "${arg}":\n${hits.map((x) => '• ' + x.text).join('\n')}\nDime el número (mira "pendientes").` };
+        target = hits[0];
+      } else if (ts.length === 1) {
+        target = ts[0];
+      } else {
+        return { reply: `¿Cuál diste por hecho? Dime el número o una palabra:\n${ts.map((x, i) => `${i + 1}. ${x.text}`).join('\n')}` };
+      }
+      removeTask(target.id);
+      const quedan = listTasks(from).length;
+      return { reply: `✅ Hecho: *${target.text}*.${quedan ? ` Te quedan ${quedan} pendiente(s).` : ' ¡Y con eso quedas a cero! 🎉'}` };
+    }
+    // Añadir
+    const mAdd = text.trim().match(/^(?:pendiente|tarea|ap[uú]ntame que tengo que|ap[uú]ntame un pendiente)\s*:?\s*(.+)/i);
+    if (mAdd) {
+      const txt = mAdd[1].trim().replace(/[.\s]+$/, '');
+      if (txt.length >= 2) {
+        addTask(from, txt);
+        const n = listTasks(from).length;
+        return { reply: `📝 Apuntado en pendientes: *${txt}*. (Tienes ${n}.) Te lo recordaré hasta que digas "hecho".` };
+      }
     }
   }
 
