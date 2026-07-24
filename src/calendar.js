@@ -172,6 +172,27 @@ export async function overlappingEvents(y, m, d, hh, mm, durMin = 60, ignoreId =
   return out;
 }
 
+// Busca un evento IDÉNTICO ya existente (mismo título + misma fecha/hora) para no duplicar
+// al crear. Devuelve el evento encontrado (con calKey) o null.
+export async function findDuplicate(summary, y, m, d, hh, mm, allDay) {
+  const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  const target = norm(summary);
+  if (!target) return null;
+  const { events } = await eventsForDateParts(y, m, d);
+  const want = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  for (const it of events) {
+    if (norm(it.ev.summary) !== target) continue;
+    const sdt = it.ev.start?.dateTime;
+    if (allDay) {
+      if (!sdt) return it; // ambos son de todo el día ese día
+    } else if (sdt) {
+      const hhmm = new Date(sdt).toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+      if (hhmm === want) return it;
+    }
+  }
+  return null;
+}
+
 function startMs(ev) {
   return new Date(ev.start?.dateTime || `${ev.start?.date}T00:00:00`).getTime();
 }

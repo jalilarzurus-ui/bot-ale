@@ -8,7 +8,7 @@
 //
 // Si ANTHROPIC_API_KEY está configurada, cualquier otro texto que empiece por
 // "agrega" se interpreta con IA en lenguaje natural.
-import { createEvent, deleteEvent, moveEvent, eventsForDateParts, eventsForRange, overlappingEvents, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
+import { createEvent, deleteEvent, moveEvent, eventsForDateParts, eventsForRange, overlappingEvents, findDuplicate, madridDateParts, madridToUtc, CALENDARS, TZ } from './calendar.js';
 import { morningBriefing, nightBriefing, dayAgendaForDate, rangeAgenda, weeklyBriefing, nextUp } from './briefing.js';
 import { addReminder, nextOccurrence, describeRepeat, listReminders, removeReminder, getLastFired } from './reminders.js';
 import { getWeather } from './weather.js';
@@ -687,6 +687,13 @@ export async function handleCommand(text, from) {
         reply:
           'No entendí el evento 🤔. Prueba en natural ("anota comida con el inversor el jueves 9pm personal") o con formato ("agrega: Cena | jueves 21:00 | personal").',
       };
+    }
+    // ¿Ya existe exactamente ese evento (mismo título y hora)? No lo dupliques.
+    const dup = await findDuplicate(parsed.summary, parsed.y, parsed.m, parsed.d, parsed.hh, parsed.mm, parsed.allDay).catch(() => null);
+    if (dup) {
+      const cal = CALENDARS[dup.calKey];
+      const cuando = parsed.allDay ? `${parsed.d}/${parsed.m} (todo el día)` : `${parsed.d}/${parsed.m} ${String(parsed.hh).padStart(2, '0')}:${String(parsed.mm).padStart(2, '0')}`;
+      return { reply: `📌 Ya lo tenías agendado: *${dup.ev.summary}* — ${cuando}${cal ? ` (${cal.label})` : ''}. No lo he duplicado.` };
     }
     // Antes de crear, miramos si choca con algo ya agendado (solo si tiene hora).
     let clashes = [];

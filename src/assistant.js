@@ -3,7 +3,7 @@
 // mediante herramientas. Reutiliza la lógica determinista ya existente (las fechas
 // las calcula el código, nunca la IA).
 import {
-  eventsForRange, eventsForDateParts, createEvent, deleteEvent, moveEvent, overlappingEvents,
+  eventsForRange, eventsForDateParts, createEvent, deleteEvent, moveEvent, overlappingEvents, findDuplicate,
   madridDateParts, madridToUtc, TZ, CALENDARS,
 } from './calendar.js';
 import { getCity } from './settings.js';
@@ -175,6 +175,9 @@ async function executeTool(name, input, ctx) {
       if (!dp) return 'No entendí el día. Pide una aclaración.';
       const allDay = input.allDay || input.hh === undefined || input.hh === null;
       const durMin = input.durMin || 60;
+      // ¿Ya existe idéntico? No duplicar.
+      const dup = await findDuplicate(input.summary, dp.y, dp.m, dp.d, input.hh, input.mm ?? 0, allDay).catch(() => null);
+      if (dup) return `YA EXISTE ese evento ("${input.summary}") a esa hora. NO lo crees de nuevo; avísale al usuario de que ya lo tenía.`;
       // Mirar choques antes de crear (solo si tiene hora).
       const clashes = allDay ? [] : await overlappingEvents(dp.y, dp.m, dp.d, input.hh, input.mm ?? 0, durMin).catch(() => []);
       await createEvent({
