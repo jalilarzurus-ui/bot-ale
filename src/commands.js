@@ -250,6 +250,29 @@ export async function parseReminderAI(text) {
   return jsonOf(r.data);
 }
 
+// Igual que parseReminderAI pero extrae UNO O VARIOS recordatorios de un mismo mensaje
+// (para soltar una lista de golpe: "recuérdame llamar a Juan, pagar la luz y comprar el regalo").
+export async function parseRemindersAI(text) {
+  const r = await anthropic({
+    model: MODEL_FAST,
+    max_tokens: 700,
+    system:
+      'Extrae UNO O VARIOS recordatorios del mensaje (en español). Responde SOLO con JSON, sin texto extra:\n' +
+      '{"items":[{"what":"...","dayText":"...","hh":10,"mm":0,"inMinutes":null,"repeat":null,"dow":null,"dom":null}]}\n' +
+      'Si el mensaje menciona VARIAS cosas que recordar (separadas por comas, por "y", o en lista), crea un item por CADA una. Cada cosa puede tener su propio día/hora.\n' +
+      '- what: qué recordar, corto y claro.\n' +
+      '- repeat: null si es una sola vez. "diario" (cada día), "semanal" (cada X día de la semana), "mensual" (cada X día del mes).\n' +
+      '- dow: SOLO "semanal", día como número (0=domingo,1=lunes,...,6=sábado). dom: SOLO "mensual", día del mes (1-31).\n' +
+      '- hh, mm: hora en 24h (si no se dice, hh:9, mm:0). En recurrentes, dayText puede ir null.\n' +
+      '- Si una dice "en X minutos/horas", pon su inMinutes (2 horas = 120) y el resto null.\n' +
+      '- Para día concreto, rellena dayText con la palabra ("hoy","mañana","lunes"..."domingo","25/07","4 de agosto") — NO calcules la fecha.',
+    messages: [{ role: 'user', content: text }],
+  });
+  if (r.down) return AI_DOWN;
+  if (!r.ok) return null;
+  return jsonOf(r.data);
+}
+
 // Normaliza texto (minúsculas, sin acentos) para comparar títulos de eventos
 function norm(s) {
   return (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -292,6 +315,7 @@ function helpMenu() {
     '',
     '⏰ *Recordatorios*',
     '• "recuérdame llamar al proveedor mañana a las 10" · "...en 30 min"',
+    '• Suelta VARIOS de golpe: "recuérdame pagar la luz el día 5, llamar a Juan mañana y comprar el regalo el viernes"',
     '• "recuérdame cada lunes a las 9 repartir bonos" (recurrentes 🔁)',
     '• "mis recordatorios" · "cancela recordatorio 2" · "pospón 1 hora"',
     '• Te aviso solo ~30 min antes de cada evento ("avisos 15", "avisos off")',
@@ -300,6 +324,40 @@ function helpMenu() {
     '• "clima" · "ciudad Dubái" · "ia redáctame un correo..." (redactar/traducir/resumir)',
     '• Puedes mandarme *notas de voz* y te confirmo qué entendí 🎤',
   ].join('\n');
+}
+
+const rid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+// Crea UN recordatorio a partir de los campos extraídos por la IA. Devuelve {line} si se creó,
+// o {error} con el motivo. Centraliza la lógica (una vez / en X min / recurrente).
+function applyReminder(r, from) {
+  const mapRepeat = { diario: 'daily', semanal: 'weekly', mensual: 'monthly' };
+  const nl = (r.what || '').trim() || 'recordatorio';
+  if (r.repeat && mapRepeat[r.repeat]) {
+    const repeat = {
+      type: mapRepeat[r.repeat], hh: r.hh ?? 9, mm: r.mm ?? 0,
+      ...(r.repeat === 'semanal' ? { dow: Number(r.dow) } : {}),
+      ...(r.repeat === 'mensual' ? { dom: Number(r.dom) } : {}),
+    };
+    if (repeat.type === 'weekly' && !(repeat.dow >= 0 && repeat.dow <= 6)) return { error: `No entendí qué día de la semana para "${nl}".` };
+    if (repeat.type === 'monthly' && !(repeat.dom >= 1 && repeat.dom <= 31)) return { error: `No entendí qué día del mes para "${nl}".` };
+    const dueTs = nextOccurrence(repeat, Date.now());
+    if (!dueTs) return { error: `No pude calcular la repetición de "${nl}".` };
+    addReminder({ id: rid(), chatId: from, text: nl, dueTs, repeat });
+    return { line: `🔁 *${nl}* — ${describeRepeat(repeat)}` };
+  }
+  let dueTs;
+  if (r.inMinutes) {
+    dueTs = Date.now() + Number(r.inMinutes) * 60000;
+  } else {
+    const dp = resolveAgendaDay(r.dayText || 'hoy');
+    if (!dp) return { error: `No entendí el cuándo de "${nl}".` };
+    dueTs = madridToUtc(dp.y, dp.m, dp.d, r.hh ?? 9, r.mm ?? 0).getTime();
+  }
+  if (dueTs < Date.now() - 60000) return { error: `La hora de "${nl}" ya pasó.` };
+  addReminder({ id: rid(), chatId: from, text: nl, dueTs });
+  const cuando = new Date(dueTs).toLocaleString('es-ES', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return { line: `⏰ *${nl}* — ${cuando}` };
 }
 
 // Interpreta un retraso en minutos de frases como "1 hora", "30 min", "media hora",
@@ -559,68 +617,32 @@ export async function handleCommand(text, from) {
     return { reply: `${w.emoji} *${w.tempC}°C*, ${w.desc} en ${w.city}` };
   }
 
-  // "recuérdame ...": crear un recordatorio que avisa a la hora indicada
-  if (/^(recu[eé]rdame|recu[eé]rda|recordar|recordatorio)\b/i.test(t)) {
-    const r = await parseReminderAI(text);
-    if (r === AI_DOWN) return { reply: SATURADO };
-    if (!r || !r.what) {
+  // "recuérdame ...": crear UNO O VARIOS recordatorios (puedes soltar una lista de golpe)
+  if (/^(recu[eé]rdame|recu[eé]rda|recordar|recordatorio|apunta que|anota que)\b/i.test(t)) {
+    const parsed = await parseRemindersAI(text);
+    if (parsed === AI_DOWN) return { reply: SATURADO };
+    const items = Array.isArray(parsed?.items) ? parsed.items.filter((x) => x && x.what) : [];
+    if (!items.length) {
       return {
         reply:
-          'No entendí el recordatorio 🤔. Ejemplos: "recuérdame llamar al proveedor mañana a las 10" o "recuérdame en 30 minutos revisar el correo".',
+          'No entendí el recordatorio 🤔. Ejemplos: "recuérdame llamar al proveedor mañana a las 10", "...en 30 minutos revisar el correo", o suelta varios: "recuérdame pagar la luz el día 5, llamar a Juan mañana y comprar el regalo el viernes".',
       };
     }
-    // Recurrente ("cada día/lunes/5 del mes"): se reprograma solo tras cada aviso.
-    const mapRepeat = { diario: 'daily', semanal: 'weekly', mensual: 'monthly' };
-    if (r.repeat && mapRepeat[r.repeat]) {
-      const repeat = {
-        type: mapRepeat[r.repeat],
-        hh: r.hh ?? 9,
-        mm: r.mm ?? 0,
-        ...(r.repeat === 'semanal' ? { dow: Number(r.dow) } : {}),
-        ...(r.repeat === 'mensual' ? { dom: Number(r.dom) } : {}),
-      };
-      if (repeat.type === 'weekly' && !(repeat.dow >= 0 && repeat.dow <= 6)) {
-        return { reply: 'No entendí qué día de la semana 🤔. Ej: "recuérdame cada lunes a las 9 repartir bonos".' };
-      }
-      if (repeat.type === 'monthly' && !(repeat.dom >= 1 && repeat.dom <= 31)) {
-        return { reply: 'No entendí qué día del mes 🤔. Ej: "recuérdame el día 5 de cada mes a las 9 pagar la cuota".' };
-      }
-      const dueTs = nextOccurrence(repeat, Date.now());
-      if (!dueTs) return { reply: 'No pude calcular la repetición 🤔. Prueba de nuevo con el día y la hora.' };
-      addReminder({
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        chatId: from,
-        text: r.what,
-        dueTs,
-        repeat,
-      });
-      const prox = new Date(dueTs).toLocaleString('es-ES', {
-        timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit',
-      });
-      return { reply: `🔁 Recordatorio recurrente activado: *${r.what}*\n📅 ${describeRepeat(repeat)}\n➡️ Próximo aviso: ${prox}` };
+    const lines = [];
+    const errors = [];
+    for (const r of items) {
+      const res = applyReminder(r, from);
+      if (res.error) errors.push('• ' + res.error);
+      else lines.push('• ' + res.line);
     }
-
-    let dueTs;
-    if (r.inMinutes) {
-      dueTs = Date.now() + Number(r.inMinutes) * 60000;
-    } else {
-      const dp = resolveAgendaDay(r.dayText || 'hoy');
-      if (!dp) return { reply: 'No entendí el cuándo 🤔. Prueba "mañana a las 10" o "en 2 horas".' };
-      dueTs = madridToUtc(dp.y, dp.m, dp.d, r.hh ?? 9, r.mm ?? 0).getTime();
+    if (!lines.length) {
+      return { reply: `No pude crear ${items.length > 1 ? 'los recordatorios' : 'el recordatorio'} 🤔.\n${errors.join('\n')}` };
     }
-    if (dueTs < Date.now() - 60000) {
-      return { reply: '⏰ Esa hora ya pasó. Dime una hora futura (ej: "mañana a las 10" o "en 2 horas").' };
-    }
-    addReminder({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      chatId: from,
-      text: r.what,
-      dueTs,
-    });
-    const cuando = new Date(dueTs).toLocaleString('es-ES', {
-      timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit',
-    });
-    return { reply: `⏰ Hecho, te lo recuerdo: *${r.what}*\n🗓️ ${cuando}` };
+    let reply = lines.length === 1
+      ? `Hecho ✅ Te lo recuerdo:\n${lines[0].slice(2)}`
+      : `Hecho ✅ Te recuerdo estas *${lines.length}* cosas:\n${lines.join('\n')}`;
+    if (errors.length) reply += `\n\n⚠️ Estas no las pude poner:\n${errors.join('\n')}`;
+    return { reply };
   }
 
   // "ia ...": asistente de IA (redactar, resumir, traducir, preguntar)
